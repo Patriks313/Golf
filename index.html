@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.1.3</title>
+  <title>Golf Coach — v0.1.4</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -440,10 +440,12 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.1.3
+    // Golf Coach v0.1.4
     //  - Recognizes full-swing W-shape: peak (top) → valley (impact) → peak (finish)
     //  - Picks the most prominent peak-valley-peak cycle as the real swing
     //  - Warns when multiple candidate cycles are found (possible waggle)
+    //  - Ignores low-confidence wrist keypoints (visibility < 0.7) so that
+    //    MediaPipe's guesses during occlusion don't create phantom dips
     // ============================================================
 
     const COUNTDOWN_SECONDS = 6;
@@ -771,13 +773,32 @@
         return;
       }
 
-      // Build wrist Y trace
+      // Build wrist Y trace.
+      // Only trust high-confidence wrist detections. During a golf swing,
+      // one wrist can become occluded at the top of the backswing (typically
+      // the trail hand going behind the head/shoulder from a face-on camera).
+      // MediaPipe keeps returning a position for it, but with low confidence —
+      // and those low-confidence positions are often wildly off, creating a
+      // phantom "dip" in the averaged trace.
+      //
+      // Strategy: high threshold (0.7) for "trust it". Below that, only use
+      // the wrist if the other wrist is even less visible. If neither is
+      // above 0.5 we return null and let the gap-filler carry the last
+      // confident value forward.
+      const HIGH_CONF = 0.7;
+      const LOW_CONF = 0.5;
       const rawY = frames.map(f => {
         const lw = f.landmarks[LM.LEFT_WRIST];
         const rw = f.landmarks[LM.RIGHT_WRIST];
-        if (lw.v > 0.3 && rw.v > 0.3) return (lw.y + rw.y) / 2;
-        if (lw.v > 0.3) return lw.y;
-        if (rw.v > 0.3) return rw.y;
+        const lOk = lw.v >= HIGH_CONF;
+        const rOk = rw.v >= HIGH_CONF;
+        if (lOk && rOk) return (lw.y + rw.y) / 2;
+        if (lOk) return lw.y;   // left wrist confident, ignore right
+        if (rOk) return rw.y;   // right wrist confident, ignore left
+        // Neither hit HIGH_CONF. Fall back to the more-visible one if it
+        // at least exceeds LOW_CONF; otherwise null (gap-fill).
+        if (lw.v >= LOW_CONF && lw.v >= rw.v) return lw.y;
+        if (rw.v >= LOW_CONF && rw.v > lw.v) return rw.y;
         return null;
       });
       let lastY = null;
@@ -1090,7 +1111,7 @@
       });
 
       lastAnalysis = {
-        version: '0.1.3',
+        version: '0.1.4',
         timestamp: new Date().toISOString(),
         value, verdict,
         addressIdx, topIdx, impactIdx, finishIdx,
