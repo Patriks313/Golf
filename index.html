@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.1</title>
+  <title>Golf Coach — v0.1.1</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -15,6 +15,9 @@
       --warn: #e5a823;
       --error: #d95f43;
       --rec: #e74c3c;
+      --address: #5dade2;
+      --top: #af7ac5;
+      --impact: #f39c12;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -51,7 +54,6 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      /* Mirror the front camera so it feels natural */
       transform: scaleX(-1);
     }
 
@@ -63,7 +65,6 @@
       pointer-events: none;
     }
 
-    /* Recording indicator */
     #rec-indicator {
       position: absolute;
       top: env(safe-area-inset-top, 16px);
@@ -94,7 +95,6 @@
       50% { opacity: 0.4; }
     }
 
-    /* Recording border */
     #rec-border {
       position: absolute;
       inset: 0;
@@ -105,7 +105,6 @@
 
     #rec-border.active { border-color: var(--rec); }
 
-    /* Bottom control panel */
     #controls {
       padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
       background: var(--bg);
@@ -144,40 +143,42 @@
       cursor: not-allowed;
     }
 
-    /* Result display */
     #result-panel {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 18, 0.96);
-      padding: 32px 24px;
+      background: var(--bg);
+      padding: 24px 20px calc(env(safe-area-inset-bottom, 20px) + 20px);
       flex-direction: column;
-      justify-content: center;
-      align-items: center;
       z-index: 10;
+      overflow-y: auto;
     }
 
     #result-panel.visible { display: flex; }
 
-    #result-label {
-      font-size: 14px;
-      color: var(--dim);
-      letter-spacing: 2px;
-      text-transform: uppercase;
+    #result-header {
+      text-align: center;
       margin-bottom: 16px;
     }
 
+    #result-label {
+      font-size: 12px;
+      color: var(--dim);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
     #result-value {
-      font-size: 72px;
+      font-size: 56px;
       font-weight: 700;
       line-height: 1;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
       font-variant-numeric: tabular-nums;
     }
 
     #result-verdict {
-      font-size: 20px;
-      margin-bottom: 32px;
+      font-size: 16px;
       color: var(--fg);
     }
 
@@ -185,19 +186,77 @@
     #result-verdict.off { color: var(--warn); }
     #result-verdict.error { color: var(--error); }
 
-    #result-detail {
-      font-size: 13px;
+    #chart-section { margin: 16px 0; }
+
+    #chart-title {
+      font-size: 11px;
       color: var(--dim);
-      text-align: center;
-      line-height: 1.6;
-      max-width: 320px;
-      margin-bottom: 32px;
-      font-variant-numeric: tabular-nums;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
     }
 
-    #result-close {
-      padding: 14px 40px;
-      font-size: 16px;
+    #chart-canvas {
+      width: 100%;
+      height: 180px;
+      background: #1a2420;
+      border-radius: 8px;
+      display: block;
+    }
+
+    #chart-legend {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--dim);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    #diagnostics {
+      background: #1a2420;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      font-variant-numeric: tabular-nums;
+      font-size: 13px;
+    }
+
+    .diag-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      color: var(--fg);
+    }
+
+    .diag-row + .diag-row {
+      border-top: 1px solid rgba(232, 228, 216, 0.08);
+    }
+
+    .diag-label { color: var(--dim); }
+
+    #result-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: auto;
+    }
+
+    #result-close, #result-save {
+      flex: 1;
+      padding: 14px;
+      font-size: 15px;
       font-weight: 600;
       border: 1px solid var(--fg);
       border-radius: 10px;
@@ -207,9 +266,14 @@
       letter-spacing: 0.5px;
     }
 
-    #result-close:active { background: rgba(232, 228, 216, 0.1); }
+    #result-close {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--bg);
+    }
 
-    /* Loading / progress screen */
+    #result-close:active, #result-save:active { opacity: 0.8; }
+
     #loading {
       position: fixed;
       inset: 0;
@@ -239,11 +303,8 @@
       animation: spin 0.8s linear infinite;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Error panel */
     #error-panel {
       display: none;
       position: fixed;
@@ -273,7 +334,6 @@
       max-width: 320px;
     }
 
-    /* Debug line */
     #debug {
       position: absolute;
       bottom: 8px;
@@ -311,11 +371,28 @@
   </div>
 
   <div id="result-panel">
-    <div id="result-label">Tempo Ratio</div>
-    <div id="result-value">—</div>
-    <div id="result-verdict"></div>
-    <div id="result-detail"></div>
-    <button id="result-close">Next Swing</button>
+    <div id="result-header">
+      <div id="result-label">Tempo Ratio</div>
+      <div id="result-value">—</div>
+      <div id="result-verdict"></div>
+    </div>
+
+    <div id="chart-section">
+      <div id="chart-title">Wrist Height Over Time</div>
+      <canvas id="chart-canvas"></canvas>
+      <div id="chart-legend">
+        <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
+      </div>
+    </div>
+
+    <div id="diagnostics"></div>
+
+    <div id="result-actions">
+      <button id="result-save">Save Raw Data</button>
+      <button id="result-close">Next Swing</button>
+    </div>
   </div>
 
   <div id="error-panel">
@@ -323,14 +400,9 @@
     <div id="error-message"></div>
   </div>
 
-  <!-- MediaPipe Pose from Google's CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 
   <script>
-    // ============================================================
-    // Golf Coach v0.1 — tempo-only, front camera, single-swing
-    // ============================================================
-
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
     const overlayCtx = overlay.getContext('2d');
@@ -343,19 +415,22 @@
     const resultPanel = document.getElementById('result-panel');
     const resultValue = document.getElementById('result-value');
     const resultVerdict = document.getElementById('result-verdict');
-    const resultDetail = document.getElementById('result-detail');
+    const diagnostics = document.getElementById('diagnostics');
+    const chartCanvas = document.getElementById('chart-canvas');
+    const chartCtx = chartCanvas.getContext('2d');
     const resultClose = document.getElementById('result-close');
+    const resultSave = document.getElementById('result-save');
     const errorPanel = document.getElementById('error-panel');
     const errorMessage = document.getElementById('error-message');
     const debug = document.getElementById('debug');
 
     let pose = null;
     let isRecording = false;
-    let frames = []; // each: {t, landmarks}
+    let frames = [];
     let recordingStartTime = 0;
     let rafId = null;
+    let lastAnalysis = null;
 
-    // --- Error handling ------------------------------------------------------
     function showError(title, message) {
       errorPanel.querySelector('#error-title').textContent = title;
       errorMessage.textContent = message;
@@ -363,12 +438,11 @@
       loading.classList.add('hidden');
     }
 
-    // --- Camera setup --------------------------------------------------------
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: 'user', // Front camera
+            facingMode: 'user',
             width: { ideal: 1280 },
             height: { ideal: 720 },
             frameRate: { ideal: 30 }
@@ -382,13 +456,12 @@
             resolve();
           };
         });
-        // Size the overlay canvas to match video
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
       } catch (e) {
         showError(
           'Camera access denied',
-          'This app needs camera access to analyze your swing. Please allow camera access in Safari settings and reload the page.'
+          'This app needs camera access. Please allow camera access in Safari and reload.'
         );
         throw e;
       }
@@ -399,33 +472,25 @@
       overlay.height = video.clientHeight;
     }
 
-    // --- MediaPipe Pose setup ------------------------------------------------
     async function setupPose() {
-      loadingLabel.textContent = 'Loading pose detection…';
       pose = new Pose({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`;
-        }
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
       });
       pose.setOptions({
-        modelComplexity: 1,        // 0=lite, 1=full, 2=heavy
+        modelComplexity: 1,
         smoothLandmarks: true,
         enableSegmentation: false,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5
       });
       pose.onResults(onPoseResults);
-      // Warm up with a dummy frame
       await pose.initialize?.();
     }
 
-    // --- Pose results handler ------------------------------------------------
     function onPoseResults(results) {
-      // Draw skeleton to overlay (so user sees they're being tracked)
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
       if (results.poseLandmarks) {
         drawSkeleton(results.poseLandmarks);
-        // If recording, store this frame
         if (isRecording) {
           frames.push({
             t: performance.now() - recordingStartTime,
@@ -438,8 +503,6 @@
       }
     }
 
-    // --- Drawing helpers -----------------------------------------------------
-    // Indices for MediaPipe Pose landmarks
     const LM = {
       NOSE: 0,
       LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
@@ -461,9 +524,7 @@
     ];
 
     function drawSkeleton(landmarks) {
-      const w = overlay.width;
-      const h = overlay.height;
-      // The video is mirrored (scaleX(-1)), so we mirror the landmarks to match
+      const w = overlay.width, h = overlay.height;
       const toX = (x) => (1 - x) * w;
       const toY = (y) => y * h;
 
@@ -471,7 +532,6 @@
       overlayCtx.strokeStyle = 'rgba(155, 197, 61, 0.85)';
       overlayCtx.fillStyle = 'rgba(232, 228, 216, 0.95)';
 
-      // Draw bones
       for (const [a, b] of BONES) {
         const la = landmarks[a], lb = landmarks[b];
         if (la.visibility > 0.3 && lb.visibility > 0.3) {
@@ -481,12 +541,8 @@
           overlayCtx.stroke();
         }
       }
-      // Draw joints
-      const keyJoints = [
-        LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER, LM.LEFT_ELBOW, LM.RIGHT_ELBOW,
-        LM.LEFT_WRIST, LM.RIGHT_WRIST, LM.LEFT_HIP, LM.RIGHT_HIP,
-        LM.LEFT_KNEE, LM.RIGHT_KNEE
-      ];
+      const keyJoints = [LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER, LM.LEFT_ELBOW, LM.RIGHT_ELBOW,
+        LM.LEFT_WRIST, LM.RIGHT_WRIST, LM.LEFT_HIP, LM.RIGHT_HIP, LM.LEFT_KNEE, LM.RIGHT_KNEE];
       for (const idx of keyJoints) {
         const lm = landmarks[idx];
         if (lm.visibility > 0.3) {
@@ -497,7 +553,6 @@
       }
     }
 
-    // --- Frame pump: feed video frames to MediaPipe --------------------------
     async function pump() {
       if (video.readyState >= 2) {
         await pose.send({ image: video });
@@ -505,7 +560,6 @@
       rafId = requestAnimationFrame(pump);
     }
 
-    // --- Recording control ---------------------------------------------------
     function startRecording() {
       frames = [];
       recordingStartTime = performance.now();
@@ -525,50 +579,45 @@
       recBorder.classList.remove('active');
       status.textContent = 'Analyzing…';
       debug.textContent = '';
-      // Analyze on next tick so UI updates
       setTimeout(analyze, 50);
     }
 
-    // --- Swing analysis: find the 3 key moments, compute tempo --------------
     function analyze() {
-      if (frames.length < 15) {
+      if (frames.length < 5) {
         showResult({
           value: '—',
           verdict: 'Too short',
           verdictClass: 'error',
-          detail: `Only ${frames.length} frames captured. Record for at least 2 seconds with your whole body in frame.`
+          wristY: [],
+          addressIdx: null, topIdx: null, impactIdx: null,
+          diag: [['Frames captured', frames.length]]
         });
         return;
       }
 
-      // Compute average wrist Y (vertical position) per frame.
-      // In image coords, y=0 is top, y=1 is bottom.
-      // At the top of the backswing, wrists are HIGHEST = smallest y.
-      // At address and impact, wrists are near the bottom (large y).
       const wristY = frames.map(f => {
         const lw = f.landmarks[LM.LEFT_WRIST];
         const rw = f.landmarks[LM.RIGHT_WRIST];
-        // Use whichever is more visible; average if both visible
         if (lw.v > 0.3 && rw.v > 0.3) return (lw.y + rw.y) / 2;
         if (lw.v > 0.3) return lw.y;
         if (rw.v > 0.3) return rw.y;
         return null;
       });
 
-      // Fill small gaps by carrying forward the last known value
       let lastY = null;
       for (let i = 0; i < wristY.length; i++) {
         if (wristY[i] == null) wristY[i] = lastY;
         else lastY = wristY[i];
       }
-      // If the first frames are null, use the first valid value
       let firstY = wristY.find(y => y != null);
       if (firstY == null) {
         showResult({
           value: '—',
           verdict: 'No pose detected',
           verdictClass: 'error',
-          detail: 'The app could not detect your body. Make sure your whole body is in frame and well-lit.'
+          wristY: [],
+          addressIdx: null, topIdx: null, impactIdx: null,
+          diag: [['Frames captured', frames.length], ['Pose detected in', '0 frames']]
         });
         return;
       }
@@ -576,39 +625,24 @@
         if (wristY[i] == null) wristY[i] = firstY;
       }
 
-      // Smooth the wrist-y trace with a small moving average (window=3)
       const smoothed = smooth(wristY, 3);
 
-      // Find the TOP of the backswing: the frame where wristY is smallest (highest point).
-      // We want the *global* minimum, but we also want to make sure it's actually
-      // meaningfully high — reject cases where there was no real swing.
-      let topIdx = 0;
-      let topY = smoothed[0];
+      let topIdx = 0, topY = smoothed[0];
       for (let i = 1; i < smoothed.length; i++) {
-        if (smoothed[i] < topY) {
-          topY = smoothed[i];
-          topIdx = i;
-        }
+        if (smoothed[i] < topY) { topY = smoothed[i]; topIdx = i; }
       }
 
-      // Find ADDRESS: the first frame before topIdx where the hands have been
-      // stationary (the starting position). We look backward from topIdx for
-      // the latest frame whose y is within a small band of the starting y.
       const startY = smoothed[0];
+      const moveThreshold = (startY - topY) * 0.15;
       let addressIdx = 0;
-      // Threshold: hands need to have moved significantly up from start
-      const moveThreshold = (startY - topY) * 0.15; // 15% of total upward travel
       for (let i = 1; i < topIdx; i++) {
         if (startY - smoothed[i] < moveThreshold) {
-          addressIdx = i; // last frame still near starting position
+          addressIdx = i;
         } else {
-          break; // once we leave the address zone, we're into the backswing
+          break;
         }
       }
 
-      // Find IMPACT: the frame after topIdx where the wrists return to
-      // approximately the starting y-level (hands back down in front of body).
-      // Look for the first frame after topIdx where smoothed[i] >= startY - moveThreshold
       let impactIdx = smoothed.length - 1;
       for (let i = topIdx + 1; i < smoothed.length; i++) {
         if (smoothed[i] >= startY - moveThreshold) {
@@ -617,57 +651,54 @@
         }
       }
 
-      // Sanity checks
-      if (topIdx - addressIdx < 3) {
-        showResult({
-          value: '—',
-          verdict: 'Backswing too short',
-          verdictClass: 'error',
-          detail: 'Could not detect a clear backswing. Try a fuller, slower motion, or re-check your framing.'
-        });
-        return;
-      }
-      if (impactIdx - topIdx < 2) {
-        showResult({
-          value: '—',
-          verdict: 'Downswing too short',
-          verdictClass: 'error',
-          detail: 'Could not detect the downswing clearly. Make sure you stopped recording after the ball-strike moment.'
-        });
-        return;
-      }
-
-      // Compute times (in milliseconds)
       const tAddress = frames[addressIdx].t;
       const tTop = frames[topIdx].t;
       const tImpact = frames[impactIdx].t;
       const backswingMs = tTop - tAddress;
       const downswingMs = tImpact - tTop;
-      const ratio = backswingMs / downswingMs;
+      const totalMs = frames[frames.length - 1].t;
+      const fps = frames.length / (totalMs / 1000);
 
-      // Verdict — tour average is ~3:1, acceptable is roughly 2:1 to 4:1
-      let verdict = 'In range';
-      let verdictClass = 'good';
-      if (ratio < 2.0) {
-        verdict = 'Backswing too fast';
-        verdictClass = 'off';
-      } else if (ratio > 4.0) {
-        verdict = 'Downswing too slow';
-        verdictClass = 'off';
-      } else if (ratio < 2.5 || ratio > 3.5) {
-        verdict = 'A little off 3:1';
-        verdictClass = 'off';
+      const diag = [
+        ['Frames captured', frames.length],
+        ['Duration', `${(totalMs/1000).toFixed(2)} s`],
+        ['Effective FPS', fps.toFixed(1)],
+        ['Address frame', `${addressIdx}  (${tAddress.toFixed(0)} ms)`],
+        ['Top frame', `${topIdx}  (${tTop.toFixed(0)} ms)`],
+        ['Impact frame', `${impactIdx}  (${tImpact.toFixed(0)} ms)`],
+        ['Backswing', `${backswingMs.toFixed(0)} ms`],
+        ['Downswing', `${downswingMs.toFixed(0)} ms`],
+        ['Start wrist Y', startY.toFixed(3)],
+        ['Top wrist Y', topY.toFixed(3)],
+        ['Wrist rise', (startY - topY).toFixed(3)]
+      ];
+
+      let ratioValue = '—';
+      let verdict = '';
+      let verdictClass = '';
+
+      if (topIdx - addressIdx < 2 || impactIdx - topIdx < 2) {
+        verdict = 'Detection failed';
+        verdictClass = 'error';
+      } else if (startY - topY < 0.05) {
+        verdict = 'No swing detected';
+        verdictClass = 'error';
+      } else {
+        const ratio = backswingMs / downswingMs;
+        ratioValue = `${ratio.toFixed(1)}:1`;
+        if (ratio < 2.0) { verdict = 'Backswing too fast'; verdictClass = 'off'; }
+        else if (ratio > 4.0) { verdict = 'Downswing too slow'; verdictClass = 'off'; }
+        else if (ratio < 2.5 || ratio > 3.5) { verdict = 'A little off 3:1'; verdictClass = 'off'; }
+        else { verdict = 'In range'; verdictClass = 'good'; }
       }
 
       showResult({
-        value: `${ratio.toFixed(1)}:1`,
+        value: ratioValue,
         verdict,
         verdictClass,
-        detail:
-          `Backswing: ${Math.round(backswingMs)} ms\n` +
-          `Downswing: ${Math.round(downswingMs)} ms\n` +
-          `Frames analyzed: ${frames.length}\n` +
-          `Address → Top → Impact: ${addressIdx} → ${topIdx} → ${impactIdx}`
+        wristY: smoothed,
+        addressIdx, topIdx, impactIdx,
+        diag
       });
     }
 
@@ -685,17 +716,140 @@
       return out;
     }
 
-    function showResult({ value, verdict, verdictClass, detail }) {
+    function drawChart(wristY, addressIdx, topIdx, impactIdx) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = chartCanvas.getBoundingClientRect();
+      chartCanvas.width = rect.width * dpr;
+      chartCanvas.height = rect.height * dpr;
+      chartCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      chartCtx.clearRect(0, 0, rect.width, rect.height);
+
+      const w = rect.width, h = rect.height;
+      const padX = 8, padY = 16;
+      const plotW = w - 2 * padX, plotH = h - 2 * padY;
+
+      if (wristY.length < 2) {
+        chartCtx.fillStyle = 'rgba(232, 228, 216, 0.4)';
+        chartCtx.font = '12px -apple-system, sans-serif';
+        chartCtx.textAlign = 'center';
+        chartCtx.fillText('Not enough data', w / 2, h / 2);
+        return;
+      }
+
+      const minY = Math.min(...wristY);
+      const maxY = Math.max(...wristY);
+      const range = Math.max(0.05, maxY - minY);
+
+      const toPx = (idx) => padX + (idx / (wristY.length - 1)) * plotW;
+      // In the chart, TOP of chart = hands HIGH (small image y),
+      // BOTTOM of chart = hands LOW (large image y).
+      const toPy = (y) => padY + ((y - minY) / range) * plotH;
+
+      // Grid line at start Y
+      chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.08)';
+      chartCtx.lineWidth = 1;
+      chartCtx.beginPath();
+      chartCtx.moveTo(padX, toPy(wristY[0]));
+      chartCtx.lineTo(padX + plotW, toPy(wristY[0]));
+      chartCtx.stroke();
+
+      // Main trace
+      chartCtx.strokeStyle = 'rgba(155, 197, 61, 0.9)';
+      chartCtx.lineWidth = 2;
+      chartCtx.beginPath();
+      for (let i = 0; i < wristY.length; i++) {
+        const px = toPx(i), py = toPy(wristY[i]);
+        if (i === 0) chartCtx.moveTo(px, py);
+        else chartCtx.lineTo(px, py);
+      }
+      chartCtx.stroke();
+
+      const events = [
+        { idx: addressIdx, color: '#5dade2', label: 'A' },
+        { idx: topIdx, color: '#af7ac5', label: 'T' },
+        { idx: impactIdx, color: '#f39c12', label: 'I' }
+      ];
+
+      for (const ev of events) {
+        if (ev.idx == null || ev.idx < 0 || ev.idx >= wristY.length) continue;
+        const px = toPx(ev.idx);
+        const py = toPy(wristY[ev.idx]);
+
+        chartCtx.strokeStyle = ev.color + '66';
+        chartCtx.lineWidth = 1;
+        chartCtx.setLineDash([3, 3]);
+        chartCtx.beginPath();
+        chartCtx.moveTo(px, padY);
+        chartCtx.lineTo(px, padY + plotH);
+        chartCtx.stroke();
+        chartCtx.setLineDash([]);
+
+        chartCtx.fillStyle = ev.color;
+        chartCtx.beginPath();
+        chartCtx.arc(px, py, 5, 0, 2 * Math.PI);
+        chartCtx.fill();
+
+        chartCtx.fillStyle = ev.color;
+        chartCtx.font = 'bold 10px -apple-system, sans-serif';
+        chartCtx.textAlign = 'center';
+        chartCtx.fillText(ev.label, px, padY - 4);
+      }
+    }
+
+    function showResult({ value, verdict, verdictClass, wristY, addressIdx, topIdx, impactIdx, diag }) {
       resultValue.textContent = value;
       resultVerdict.textContent = verdict;
       resultVerdict.className = '';
       if (verdictClass) resultVerdict.classList.add(verdictClass);
-      resultDetail.textContent = detail;
+
+      diagnostics.innerHTML = '';
+      for (const [label, val] of diag) {
+        const row = document.createElement('div');
+        row.className = 'diag-row';
+        row.innerHTML = `<span class="diag-label">${label}</span><span>${val}</span>`;
+        diagnostics.appendChild(row);
+      }
+
       resultPanel.classList.add('visible');
-      status.textContent = 'Tap Start, take your stance, swing, tap Stop.';
+      status.textContent = 'Tap Start for next swing.';
+
+      requestAnimationFrame(() => {
+        drawChart(wristY, addressIdx, topIdx, impactIdx);
+      });
+
+      lastAnalysis = {
+        timestamp: new Date().toISOString(),
+        value, verdict,
+        addressIdx, topIdx, impactIdx,
+        wristY,
+        frames: frames.map(f => ({
+          t: f.t,
+          leftWrist: f.landmarks[LM.LEFT_WRIST],
+          rightWrist: f.landmarks[LM.RIGHT_WRIST],
+          leftHip: f.landmarks[LM.LEFT_HIP],
+          rightHip: f.landmarks[LM.RIGHT_HIP],
+          leftShoulder: f.landmarks[LM.LEFT_SHOULDER],
+          rightShoulder: f.landmarks[LM.RIGHT_SHOULDER],
+          nose: f.landmarks[LM.NOSE]
+        }))
+      };
     }
 
-    // --- Event wiring --------------------------------------------------------
+    function saveRawData() {
+      if (!lastAnalysis) return;
+      const json = JSON.stringify(lastAnalysis, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `swing-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
     recordBtn.addEventListener('click', () => {
       if (isRecording) stopRecording();
       else startRecording();
@@ -705,20 +859,20 @@
       resultPanel.classList.remove('visible');
     });
 
-    // --- Boot ----------------------------------------------------------------
+    resultSave.addEventListener('click', saveRawData);
+
     (async function boot() {
       try {
         loadingLabel.textContent = 'Requesting camera…';
         await startCamera();
         loadingLabel.textContent = 'Loading pose detection…';
         await setupPose();
-        pump(); // Start feeding frames to MediaPipe
+        pump();
         loading.classList.add('hidden');
         recordBtn.disabled = false;
         status.textContent = 'Ready. Tap Start.';
       } catch (e) {
         console.error(e);
-        // If showError wasn't already called, show a generic one
         if (!errorPanel.classList.contains('visible')) {
           showError('Startup failed', e.message || 'Could not start the app.');
         }
