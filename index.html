@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.1.2</title>
+  <title>Golf Coach — v0.1.3</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -18,6 +18,7 @@
       --address: #5dade2;
       --top: #af7ac5;
       --impact: #f39c12;
+      --finish: #ec87c0;
       --beep: #e8e4d8;
     }
 
@@ -91,10 +92,7 @@
       animation: pulse 1s infinite;
     }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
     #rec-border {
       position: absolute;
@@ -107,7 +105,6 @@
     #rec-border.active { border-color: var(--rec); }
     #rec-border.countdown { border-color: var(--accent); }
 
-    /* Giant countdown overlay shown during the pre-beep delay */
     #countdown {
       position: absolute;
       inset: 0;
@@ -135,10 +132,8 @@
       color: var(--fg);
       text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
       letter-spacing: 1px;
+      display: none;
     }
-
-    #countdown.active + #countdown-label { display: block; }
-    #countdown-label { display: none; }
 
     #controls {
       padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
@@ -192,10 +187,7 @@
 
     #result-panel.visible { display: flex; }
 
-    #result-header {
-      text-align: center;
-      margin-bottom: 16px;
-    }
+    #result-header { text-align: center; margin-bottom: 16px; }
 
     #result-label {
       font-size: 12px;
@@ -221,6 +213,19 @@
     #result-verdict.good { color: var(--accent); }
     #result-verdict.off { color: var(--warn); }
     #result-verdict.error { color: var(--error); }
+
+    #warnings {
+      margin: 12px 0;
+      padding: 10px 14px;
+      background: rgba(229, 168, 35, 0.12);
+      border-left: 3px solid var(--warn);
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--fg);
+      display: none;
+    }
+
+    #warnings.visible { display: block; }
 
     #chart-section { margin: 16px 0; }
 
@@ -250,17 +255,8 @@
       flex-wrap: wrap;
     }
 
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .legend-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-    }
+    .legend-item { display: flex; align-items: center; gap: 4px; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
 
     #diagnostics {
       background: #1a2420;
@@ -278,10 +274,7 @@
       color: var(--fg);
     }
 
-    .diag-row + .diag-row {
-      border-top: 1px solid rgba(232, 228, 216, 0.08);
-    }
-
+    .diag-row + .diag-row { border-top: 1px solid rgba(232, 228, 216, 0.08); }
     .diag-label { color: var(--dim); }
 
     #result-actions {
@@ -416,6 +409,8 @@
       <div id="result-verdict"></div>
     </div>
 
+    <div id="warnings"></div>
+
     <div id="chart-section">
       <div id="chart-title">Wrist Height Over Time</div>
       <canvas id="chart-canvas"></canvas>
@@ -424,6 +419,7 @@
         <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--finish)"></div>Finish</div>
       </div>
     </div>
 
@@ -444,10 +440,10 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.1.2
-    //   - 6-second on-screen countdown + final beep
-    //   - Recording begins at the beep
-    //   - Algorithm finds motion onset from data, not from the beep
+    // Golf Coach v0.1.3
+    //  - Recognizes full-swing W-shape: peak (top) → valley (impact) → peak (finish)
+    //  - Picks the most prominent peak-valley-peak cycle as the real swing
+    //  - Warns when multiple candidate cycles are found (possible waggle)
     // ============================================================
 
     const COUNTDOWN_SECONDS = 6;
@@ -466,6 +462,7 @@
     const resultPanel = document.getElementById('result-panel');
     const resultValue = document.getElementById('result-value');
     const resultVerdict = document.getElementById('result-verdict');
+    const warningsEl = document.getElementById('warnings');
     const diagnostics = document.getElementById('diagnostics');
     const chartCanvas = document.getElementById('chart-canvas');
     const chartCtx = chartCanvas.getContext('2d');
@@ -476,7 +473,7 @@
     const debug = document.getElementById('debug');
 
     let pose = null;
-    let appState = 'idle'; // idle | counting | recording
+    let appState = 'idle';
     let frames = [];
     let recordingStartTime = 0;
     let beepTime = 0;
@@ -492,16 +489,10 @@
       loading.classList.add('hidden');
     }
 
-    // --- Camera --------------------------------------------------------------
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'user',
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30 }
-          },
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
           audio: false
         });
         video.srcObject = stream;
@@ -511,8 +502,7 @@
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
       } catch (e) {
-        showError('Camera access denied',
-          'This app needs camera access. Please allow it and reload.');
+        showError('Camera access denied', 'This app needs camera access. Please allow it and reload.');
         throw e;
       }
     }
@@ -522,12 +512,8 @@
       overlay.height = video.clientHeight;
     }
 
-    // --- Audio: short "beep" tone -------------------------------------------
     function ensureAudio() {
-      if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      // Safari: resume if suspended (required for audio after user gesture)
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') audioCtx.resume();
     }
 
@@ -537,7 +523,7 @@
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, now); // A5
+      osc.frequency.setValueAtTime(880, now);
       gain.gain.setValueAtTime(0, now);
       gain.gain.linearRampToValueAtTime(0.3, now + 0.02);
       gain.gain.linearRampToValueAtTime(0, now + 0.25);
@@ -547,14 +533,13 @@
       osc.stop(now + 0.3);
     }
 
-    // Short "tick" for each countdown second (quieter, different pitch)
     function playTick() {
       if (!audioCtx) return;
       const now = audioCtx.currentTime;
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(440, now); // A4
+      osc.frequency.setValueAtTime(440, now);
       gain.gain.setValueAtTime(0, now);
       gain.gain.linearRampToValueAtTime(0.12, now + 0.01);
       gain.gain.linearRampToValueAtTime(0, now + 0.08);
@@ -564,7 +549,6 @@
       osc.stop(now + 0.1);
     }
 
-    // --- MediaPipe Pose ------------------------------------------------------
     async function setupPose() {
       pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
@@ -620,11 +604,9 @@
       const w = overlay.width, h = overlay.height;
       const toX = (x) => (1 - x) * w;
       const toY = (y) => y * h;
-
       overlayCtx.lineWidth = 3;
       overlayCtx.strokeStyle = 'rgba(155, 197, 61, 0.85)';
       overlayCtx.fillStyle = 'rgba(232, 228, 216, 0.95)';
-
       for (const [a, b] of BONES) {
         const la = landmarks[a], lb = landmarks[b];
         if (la.visibility > 0.3 && lb.visibility > 0.3) {
@@ -647,15 +629,13 @@
     }
 
     async function pump() {
-      if (video.readyState >= 2) {
-        await pose.send({ image: video });
-      }
+      if (video.readyState >= 2) await pose.send({ image: video });
       rafId = requestAnimationFrame(pump);
     }
 
-    // --- Countdown + recording lifecycle ------------------------------------
+    // --- Countdown / recording lifecycle ------------------------------------
     function startCountdown() {
-      ensureAudio(); // MUST happen on user gesture (this click) for Safari
+      ensureAudio();
       appState = 'counting';
       let remaining = COUNTDOWN_SECONDS;
       recordBtn.textContent = `${remaining}…`;
@@ -666,9 +646,7 @@
       countdownLabel.style.display = 'block';
       recBorder.classList.add('countdown');
       status.textContent = 'Get into your stance. Swing when the beep plays.';
-
       playTick();
-
       countdownTimer = setInterval(() => {
         remaining--;
         if (remaining > 0) {
@@ -690,7 +668,7 @@
       playBeep();
       frames = [];
       recordingStartTime = performance.now();
-      beepTime = 0; // beep fires at t=0 in recording time
+      beepTime = 0;
       appState = 'recording';
       recordBtn.textContent = 'Stop';
       recordBtn.classList.remove('counting');
@@ -712,22 +690,89 @@
       setTimeout(analyze, 50);
     }
 
-    // --- Analysis ------------------------------------------------------------
+    // --- Peak/valley finder --------------------------------------------------
+    // For wristY: LOW value = HIGH hands.
+    // "Swing peaks" (hands high moments) = local MINIMA of wristY.
+    // "Swing valleys" (hands low moments) = local MAXIMA of wristY.
+    //
+    // Prominence: how much the peak/valley stands out against the surrounding
+    // terrain. Low-prominence peaks are noise; high-prominence peaks are real
+    // swing events.
+
+    function findPeaks(y, minProminence) {
+      // Returns indices where y[i] is a local MINIMUM (hands high) with
+      // at least minProminence of depth.
+      const peaks = [];
+      const n = y.length;
+      for (let i = 1; i < n - 1; i++) {
+        if (y[i] < y[i-1] && y[i] < y[i+1]) {
+          peaks.push(i);
+        }
+      }
+      // Compute prominence for each, filter
+      const prominent = [];
+      for (const p of peaks) {
+        // Look left: find the highest y (= lowest hands) before reaching a lower y (higher hands).
+        // Prominence = how much we have to "climb down" (in y terms, climb up)
+        // on each side before finding another point at least as high (y low) as p.
+        let leftMax = y[p];
+        for (let i = p - 1; i >= 0; i--) {
+          if (y[i] < y[p]) break; // found a higher peak on the left
+          if (y[i] > leftMax) leftMax = y[i];
+        }
+        let rightMax = y[p];
+        for (let i = p + 1; i < n; i++) {
+          if (y[i] < y[p]) break;
+          if (y[i] > rightMax) rightMax = y[i];
+        }
+        const prom = Math.min(leftMax, rightMax) - y[p];
+        if (prom >= minProminence) prominent.push({ idx: p, prominence: prom, value: y[p] });
+      }
+      return prominent;
+    }
+
+    function findValleys(y, minProminence) {
+      // Local MAXIMA of wristY = hands LOW.
+      const valleys = [];
+      const n = y.length;
+      for (let i = 1; i < n - 1; i++) {
+        if (y[i] > y[i-1] && y[i] > y[i+1]) {
+          valleys.push(i);
+        }
+      }
+      const prominent = [];
+      for (const v of valleys) {
+        let leftMin = y[v];
+        for (let i = v - 1; i >= 0; i--) {
+          if (y[i] > y[v]) break;
+          if (y[i] < leftMin) leftMin = y[i];
+        }
+        let rightMin = y[v];
+        for (let i = v + 1; i < n; i++) {
+          if (y[i] > y[v]) break;
+          if (y[i] < rightMin) rightMin = y[i];
+        }
+        const prom = y[v] - Math.max(leftMin, rightMin);
+        if (prom >= minProminence) prominent.push({ idx: v, prominence: prom, value: y[v] });
+      }
+      return prominent;
+    }
+
+    // --- Main analysis -------------------------------------------------------
     function analyze() {
-      if (frames.length < 10) {
+      if (frames.length < 15) {
         showResult({
-          value: '—',
-          verdict: 'Too short',
-          verdictClass: 'error',
+          value: '—', verdict: 'Too short', verdictClass: 'error',
           wristY: [],
-          addressIdx: null, topIdx: null, impactIdx: null,
-          diag: [['Frames captured', frames.length]]
+          addressIdx: null, topIdx: null, impactIdx: null, finishIdx: null,
+          diag: [['Frames captured', frames.length]],
+          warnings: []
         });
         return;
       }
 
       // Build wrist Y trace
-      const wristY = frames.map(f => {
+      const rawY = frames.map(f => {
         const lw = f.landmarks[LM.LEFT_WRIST];
         const rw = f.landmarks[LM.RIGHT_WRIST];
         if (lw.v > 0.3 && rw.v > 0.3) return (lw.y + rw.y) / 2;
@@ -735,123 +780,137 @@
         if (rw.v > 0.3) return rw.y;
         return null;
       });
-      // Fill gaps
       let lastY = null;
-      for (let i = 0; i < wristY.length; i++) {
-        if (wristY[i] == null) wristY[i] = lastY;
-        else lastY = wristY[i];
+      for (let i = 0; i < rawY.length; i++) {
+        if (rawY[i] == null) rawY[i] = lastY;
+        else lastY = rawY[i];
       }
-      let firstY = wristY.find(y => y != null);
+      let firstY = rawY.find(y => y != null);
       if (firstY == null) {
         showResult({
           value: '—', verdict: 'No pose detected', verdictClass: 'error',
-          wristY: [], addressIdx: null, topIdx: null, impactIdx: null,
-          diag: [['Frames captured', frames.length], ['Pose detected in', '0 frames']]
+          wristY: [], addressIdx: null, topIdx: null, impactIdx: null, finishIdx: null,
+          diag: [['Frames captured', frames.length], ['Pose detected in', '0 frames']],
+          warnings: []
         });
         return;
       }
-      for (let i = 0; i < wristY.length; i++) {
-        if (wristY[i] == null) wristY[i] = firstY;
+      for (let i = 0; i < rawY.length; i++) {
+        if (rawY[i] == null) rawY[i] = firstY;
       }
 
-      const smoothed = smooth(wristY, 5);
+      const smoothed = smooth(rawY, 5);
 
-      // 1) Find TOP of backswing: lowest Y value (hands highest)
-      let topIdx = 0, topY = smoothed[0];
-      for (let i = 1; i < smoothed.length; i++) {
-        if (smoothed[i] < topY) { topY = smoothed[i]; topIdx = i; }
-      }
+      // Overall range tells us what "prominent" should mean
+      const minY = Math.min(...smoothed);
+      const maxY = Math.max(...smoothed);
+      const totalRange = maxY - minY;
 
-      // 2) Find ADDRESS: the "motion onset" frame, working backwards from the top.
-      // We compute a velocity-like measure (frame-to-frame Y change) and find
-      // the last frame BEFORE topIdx where velocity was essentially zero.
-      //
-      // Strategy: a "still" frame is one where smoothed[i] is within a small
-      // band of smoothed[i-windowsize] (i.e., almost no movement over a short
-      // window). We scan backwards from the top to find the last frame where
-      // this is true, then take the frame just after that as the motion onset.
+      // Prominence threshold: 10% of total range, with absolute floor
+      const minProminence = Math.max(0.04, totalRange * 0.15);
 
-      const STILLNESS_WINDOW = 6; // frames (~200ms at 30fps)
-      const STILLNESS_THRESHOLD = Math.max(0.015, (smoothed[0] - topY) * 0.05);
-      // ^^ Either 1.5% of image height, or 5% of total rise — whichever is bigger.
+      const peaks = findPeaks(smoothed, minProminence);    // hands-high moments
+      const valleys = findValleys(smoothed, minProminence); // hands-low moments
 
-      // Walk backwards from topIdx looking for a sustained still period.
-      let addressIdx = 0;
-      for (let i = topIdx - 1; i >= STILLNESS_WINDOW; i--) {
-        // Is the window [i - WINDOW, i] still?
-        let maxInWindow = -Infinity, minInWindow = Infinity;
-        for (let j = i - STILLNESS_WINDOW; j <= i; j++) {
-          if (smoothed[j] > maxInWindow) maxInWindow = smoothed[j];
-          if (smoothed[j] < minInWindow) minInWindow = smoothed[j];
-        }
-        if (maxInWindow - minInWindow < STILLNESS_THRESHOLD) {
-          // We found a stillness window ending at frame i.
-          // Address = frame right after this window (motion about to start).
-          addressIdx = i;
-          break;
-        }
-      }
+      const warnings = [];
 
-      // If we never found a stillness window (user was always moving),
-      // fall back to a simple threshold-based approach for address.
-      if (addressIdx === 0 && topIdx > 5) {
-        // Use the earliest frame whose Y is within 10% of starting position
-        // AND is followed by sustained upward motion.
-        const addressBand = (smoothed[0] - topY) * 0.10;
-        for (let i = 1; i < topIdx; i++) {
-          if (Math.abs(smoothed[i] - smoothed[0]) < addressBand) {
-            addressIdx = i;
-          } else {
-            break;
+      // --- Find the SWING: a peak → valley → peak sequence ---
+      // Strategy: among all (peak1, valley, peak2) triples where valley sits
+      // between peak1 and peak2, pick the one with highest total prominence.
+      // Then top = peak1, impact = valley, finish = peak2.
+
+      let bestTriple = null;
+      let bestScore = -1;
+
+      for (let i = 0; i < peaks.length; i++) {
+        for (let j = i + 1; j < peaks.length; j++) {
+          const p1 = peaks[i], p2 = peaks[j];
+          // Find the highest-wristY valley between them (hands lowest = impact)
+          let bestValley = null;
+          for (const v of valleys) {
+            if (v.idx > p1.idx && v.idx < p2.idx) {
+              if (!bestValley || v.value > bestValley.value) bestValley = v;
+            }
+          }
+          if (!bestValley) continue;
+          // Score = combined prominence
+          const score = p1.prominence + p2.prominence + bestValley.prominence;
+          if (score > bestScore) {
+            bestScore = score;
+            bestTriple = { top: p1, impact: bestValley, finish: p2 };
           }
         }
       }
 
-      // 3) Find IMPACT: after the top, find the frame where the hands cross
-      // back through roughly the starting level on their way down. We look
-      // for the first frame after topIdx where wristY returns to within a
-      // small band of the starting Y — but we use a tighter definition than
-      // the old "fully back to start" approach: we call it "crossed address
-      // height" when smoothed[i] >= startY - impactBand.
-      //
-      // Additionally, to avoid catching mid-downswing wobbles that don't
-      // quite reach impact, we confirm by requiring the hands stay near or
-      // below that level for at least a few frames (persistence check).
-      const addressY = smoothed[addressIdx];
-      const impactBand = (addressY - topY) * 0.15; // 15% of amplitude
-      let impactIdx = -1;
-      const PERSIST_FRAMES = 3;
-      for (let i = topIdx + 1; i < smoothed.length; i++) {
-        if (smoothed[i] >= addressY - impactBand) {
-          // Check persistence: stay near-or-below for PERSIST_FRAMES more frames
-          let persists = true;
-          for (let j = i + 1; j <= i + PERSIST_FRAMES && j < smoothed.length; j++) {
-            if (smoothed[j] < addressY - impactBand * 2) { persists = false; break; }
-          }
-          if (persists) { impactIdx = i; break; }
+      let topIdx, impactIdx, finishIdx, addressIdx;
+
+      if (bestTriple) {
+        topIdx = bestTriple.top.idx;
+        impactIdx = bestTriple.impact.idx;
+        finishIdx = bestTriple.finish.idx;
+        if (peaks.length > 2) {
+          warnings.push(`Detected ${peaks.length} high-hand peaks; used the most prominent two. If you didn't make a full practice motion, try one continuous swing from a settled stance.`);
         }
-      }
-      if (impactIdx === -1) {
-        // Didn't find a clean impact — use the frame closest to address height
-        // after the top.
-        let bestDist = Infinity;
+      } else if (peaks.length === 1) {
+        // Only one peak found — this is a partial swing (no follow-through)
+        // Fall back to the older approach: top is the peak, impact is the
+        // lowest point after the peak.
+        topIdx = peaks[0].idx;
+        finishIdx = null;
+        let candidate = null;
         for (let i = topIdx + 1; i < smoothed.length; i++) {
-          const d = Math.abs(smoothed[i] - addressY);
-          if (d < bestDist) { bestDist = d; impactIdx = i; }
+          if (!candidate || smoothed[i] > smoothed[candidate]) candidate = i;
         }
-        if (impactIdx === -1) impactIdx = smoothed.length - 1;
+        impactIdx = candidate != null ? candidate : smoothed.length - 1;
+        warnings.push('Only one peak detected — this looks like a partial swing with no follow-through. For full swings, swing all the way through to the finish position.');
+      } else {
+        // No prominent peaks at all
+        showResult({
+          value: '—', verdict: 'No swing detected', verdictClass: 'error',
+          wristY: smoothed,
+          addressIdx: 0, topIdx: null, impactIdx: null, finishIdx: null,
+          diag: [
+            ['Frames captured', frames.length],
+            ['wristY range', totalRange.toFixed(3)],
+            ['Prominent peaks found', 0]
+          ],
+          warnings: ['No clear swing motion detected. Make sure your whole body (including arms raised at the top of your swing) stays in frame.']
+        });
+        return;
       }
 
-      // --- Build diagnostics -------------------------------------------------
+      // --- Find ADDRESS: motion onset before Top ---
+      // Look for the last period of stillness before topIdx.
+      const STILLNESS_WINDOW = 6;
+      const topY = smoothed[topIdx];
+      const stillnessThreshold = Math.max(0.015, (smoothed[0] - topY) * 0.05);
+      addressIdx = 0;
+      for (let i = topIdx - 1; i >= STILLNESS_WINDOW; i--) {
+        let mx = -Infinity, mn = Infinity;
+        for (let j = i - STILLNESS_WINDOW; j <= i; j++) {
+          if (smoothed[j] > mx) mx = smoothed[j];
+          if (smoothed[j] < mn) mn = smoothed[j];
+        }
+        if (mx - mn < stillnessThreshold) { addressIdx = i; break; }
+      }
+      // Fallback if no clear stillness window
+      if (addressIdx === 0 && topIdx > 8) {
+        const band = (smoothed[0] - topY) * 0.10;
+        for (let i = 1; i < topIdx; i++) {
+          if (Math.abs(smoothed[i] - smoothed[0]) < band) addressIdx = i;
+          else break;
+        }
+      }
+
+      // --- Compute timings ---
       const tAddress = frames[addressIdx].t;
       const tTop = frames[topIdx].t;
       const tImpact = frames[impactIdx].t;
+      const tFinish = finishIdx != null ? frames[finishIdx].t : null;
       const backswingMs = tTop - tAddress;
       const downswingMs = tImpact - tTop;
       const totalMs = frames[frames.length - 1].t;
       const fps = frames.length / (totalMs / 1000);
-
-      // Time from beep to actual motion onset
       const beepToAddressMs = tAddress - beepTime;
 
       const diag = [
@@ -862,26 +921,24 @@
         ['Address frame', `${addressIdx}  (${tAddress.toFixed(0)} ms)`],
         ['Top frame', `${topIdx}  (${tTop.toFixed(0)} ms)`],
         ['Impact frame', `${impactIdx}  (${tImpact.toFixed(0)} ms)`],
-        ['Backswing', `${backswingMs.toFixed(0)} ms`],
-        ['Downswing', `${downswingMs.toFixed(0)} ms`],
-        ['Address wrist Y', addressY.toFixed(3)],
-        ['Top wrist Y', topY.toFixed(3)],
-        ['Wrist rise', (addressY - topY).toFixed(3)]
       ];
+      if (finishIdx != null) diag.push(['Finish frame', `${finishIdx}  (${tFinish.toFixed(0)} ms)`]);
+      diag.push(['Backswing', `${backswingMs.toFixed(0)} ms`]);
+      diag.push(['Downswing', `${downswingMs.toFixed(0)} ms`]);
+      diag.push(['Peaks found', peaks.length]);
+      diag.push(['Valleys found', valleys.length]);
+      diag.push(['Wrist rise', (smoothed[addressIdx] - topY).toFixed(3)]);
 
-      // --- Decide verdict ----------------------------------------------------
+      // --- Verdict ---
       let ratioValue = '—';
       let verdict = '';
       let verdictClass = '';
 
-      if (topIdx - addressIdx < 3 || impactIdx - topIdx < 2) {
+      if (backswingMs <= 0 || downswingMs <= 0) {
         verdict = 'Detection failed';
         verdictClass = 'error';
-      } else if (addressY - topY < 0.08) {
+      } else if (smoothed[addressIdx] - topY < 0.08) {
         verdict = 'No swing detected';
-        verdictClass = 'error';
-      } else if (backswingMs <= 0 || downswingMs <= 0) {
-        verdict = 'Detection failed';
         verdictClass = 'error';
       } else {
         const ratio = backswingMs / downswingMs;
@@ -895,8 +952,8 @@
       showResult({
         value: ratioValue, verdict, verdictClass,
         wristY: smoothed,
-        addressIdx, topIdx, impactIdx,
-        diag
+        addressIdx, topIdx, impactIdx, finishIdx,
+        diag, warnings
       });
     }
 
@@ -904,18 +961,17 @@
       const out = [];
       const half = Math.floor(window / 2);
       for (let i = 0; i < arr.length; i++) {
-        let sum = 0, count = 0;
+        let s = 0, c = 0;
         for (let j = Math.max(0, i - half); j <= Math.min(arr.length - 1, i + half); j++) {
-          sum += arr[j];
-          count++;
+          s += arr[j]; c++;
         }
-        out.push(sum / count);
+        out.push(s / c);
       }
       return out;
     }
 
     // --- Chart ---------------------------------------------------------------
-    function drawChart(wristY, addressIdx, topIdx, impactIdx) {
+    function drawChart(wristY, addressIdx, topIdx, impactIdx, finishIdx) {
       const dpr = window.devicePixelRatio || 1;
       const rect = chartCanvas.getBoundingClientRect();
       chartCanvas.width = rect.width * dpr;
@@ -938,11 +994,9 @@
       const minY = Math.min(...wristY);
       const maxY = Math.max(...wristY);
       const range = Math.max(0.05, maxY - minY);
-
       const toPx = (idx) => padX + (idx / (wristY.length - 1)) * plotW;
       const toPy = (y) => padY + ((y - minY) / range) * plotH;
 
-      // Grid line at the Address wristY value (a useful reference)
       if (addressIdx != null && addressIdx >= 0 && addressIdx < wristY.length) {
         chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.08)';
         chartCtx.lineWidth = 1;
@@ -952,7 +1006,6 @@
         chartCtx.stroke();
       }
 
-      // Main trace
       chartCtx.strokeStyle = 'rgba(155, 197, 61, 0.9)';
       chartCtx.lineWidth = 2;
       chartCtx.beginPath();
@@ -963,7 +1016,7 @@
       }
       chartCtx.stroke();
 
-      // Beep marker at frame 0 (recording started at the beep)
+      // Beep marker
       {
         const px = toPx(0);
         chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.35)';
@@ -983,14 +1036,14 @@
       const events = [
         { idx: addressIdx, color: '#5dade2', label: 'A' },
         { idx: topIdx, color: '#af7ac5', label: 'T' },
-        { idx: impactIdx, color: '#f39c12', label: 'I' }
+        { idx: impactIdx, color: '#f39c12', label: 'I' },
+        { idx: finishIdx, color: '#ec87c0', label: 'F' }
       ];
 
       for (const ev of events) {
         if (ev.idx == null || ev.idx < 0 || ev.idx >= wristY.length) continue;
         const px = toPx(ev.idx);
         const py = toPy(wristY[ev.idx]);
-
         chartCtx.strokeStyle = ev.color + '66';
         chartCtx.lineWidth = 1;
         chartCtx.setLineDash([3, 3]);
@@ -999,12 +1052,10 @@
         chartCtx.lineTo(px, padY + plotH);
         chartCtx.stroke();
         chartCtx.setLineDash([]);
-
         chartCtx.fillStyle = ev.color;
         chartCtx.beginPath();
         chartCtx.arc(px, py, 5, 0, 2 * Math.PI);
         chartCtx.fill();
-
         chartCtx.fillStyle = ev.color;
         chartCtx.font = 'bold 10px -apple-system, sans-serif';
         chartCtx.textAlign = 'center';
@@ -1012,11 +1063,18 @@
       }
     }
 
-    function showResult({ value, verdict, verdictClass, wristY, addressIdx, topIdx, impactIdx, diag }) {
+    function showResult({ value, verdict, verdictClass, wristY, addressIdx, topIdx, impactIdx, finishIdx, diag, warnings }) {
       resultValue.textContent = value;
       resultVerdict.textContent = verdict;
       resultVerdict.className = '';
       if (verdictClass) resultVerdict.classList.add(verdictClass);
+
+      if (warnings && warnings.length > 0) {
+        warningsEl.innerHTML = warnings.map(w => `<div>⚠ ${w}</div>`).join('');
+        warningsEl.classList.add('visible');
+      } else {
+        warningsEl.classList.remove('visible');
+      }
 
       diagnostics.innerHTML = '';
       for (const [label, val] of diag) {
@@ -1025,19 +1083,17 @@
         row.innerHTML = `<span class="diag-label">${label}</span><span>${val}</span>`;
         diagnostics.appendChild(row);
       }
-
       resultPanel.classList.add('visible');
       status.textContent = 'Tap Start for next swing.';
-
       requestAnimationFrame(() => {
-        drawChart(wristY, addressIdx, topIdx, impactIdx);
+        drawChart(wristY, addressIdx, topIdx, impactIdx, finishIdx);
       });
 
       lastAnalysis = {
-        version: '0.1.2',
+        version: '0.1.3',
         timestamp: new Date().toISOString(),
         value, verdict,
-        addressIdx, topIdx, impactIdx,
+        addressIdx, topIdx, impactIdx, finishIdx,
         wristY,
         frames: frames.map(f => ({
           t: f.t,
@@ -1067,20 +1123,13 @@
       URL.revokeObjectURL(url);
     }
 
-    // --- Events --------------------------------------------------------------
     recordBtn.addEventListener('click', () => {
       if (appState === 'idle') startCountdown();
       else if (appState === 'recording') stopRecording();
-      // ignore clicks during 'counting'
     });
-
-    resultClose.addEventListener('click', () => {
-      resultPanel.classList.remove('visible');
-    });
-
+    resultClose.addEventListener('click', () => resultPanel.classList.remove('visible'));
     resultSave.addEventListener('click', saveRawData);
 
-    // --- Boot ----------------------------------------------------------------
     (async function boot() {
       try {
         loadingLabel.textContent = 'Requesting camera…';
