@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.1.1</title>
+  <title>Golf Coach — v0.1.2</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -18,6 +18,7 @@
       --address: #5dade2;
       --top: #af7ac5;
       --impact: #f39c12;
+      --beep: #e8e4d8;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -104,6 +105,40 @@
     }
 
     #rec-border.active { border-color: var(--rec); }
+    #rec-border.countdown { border-color: var(--accent); }
+
+    /* Giant countdown overlay shown during the pre-beep delay */
+    #countdown {
+      position: absolute;
+      inset: 0;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      font-size: min(30vw, 240px);
+      font-weight: 700;
+      color: var(--accent);
+      text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+      pointer-events: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #countdown.active { display: flex; }
+
+    #countdown-label {
+      position: absolute;
+      bottom: 15%;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 18px;
+      font-weight: 400;
+      color: var(--fg);
+      text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+      letter-spacing: 1px;
+    }
+
+    #countdown.active + #countdown-label { display: block; }
+    #countdown-label { display: none; }
 
     #controls {
       padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
@@ -137,6 +172,7 @@
 
     #record-btn:active { transform: scale(0.98); }
     #record-btn.recording { background: var(--rec); color: #fff; }
+    #record-btn.counting { background: var(--warn); color: var(--bg); }
     #record-btn:disabled {
       background: var(--dim);
       color: rgba(0,0,0,0.4);
@@ -207,10 +243,11 @@
     #chart-legend {
       display: flex;
       justify-content: center;
-      gap: 16px;
+      gap: 14px;
       margin-top: 8px;
       font-size: 11px;
       color: var(--dim);
+      flex-wrap: wrap;
     }
 
     .legend-item {
@@ -356,11 +393,13 @@
         <div id="rec-dot"></div>
         <span>REC</span>
       </div>
+      <div id="countdown">6</div>
+      <div id="countdown-label">Get into your stance</div>
       <div id="debug"></div>
     </div>
 
     <div id="controls">
-      <div id="status">Tap Start, take your stance, swing, tap Stop.</div>
+      <div id="status">Tap Start. You have 6 seconds to get into stance.</div>
       <button id="record-btn" disabled>Start</button>
     </div>
   </div>
@@ -381,6 +420,7 @@
       <div id="chart-title">Wrist Height Over Time</div>
       <canvas id="chart-canvas"></canvas>
       <div id="chart-legend">
+        <div class="legend-item"><div class="legend-dot" style="background: var(--beep)"></div>Beep</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
@@ -403,6 +443,15 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 
   <script>
+    // ============================================================
+    // Golf Coach v0.1.2
+    //   - 6-second on-screen countdown + final beep
+    //   - Recording begins at the beep
+    //   - Algorithm finds motion onset from data, not from the beep
+    // ============================================================
+
+    const COUNTDOWN_SECONDS = 6;
+
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
     const overlayCtx = overlay.getContext('2d');
@@ -410,6 +459,8 @@
     const status = document.getElementById('status');
     const recIndicator = document.getElementById('rec-indicator');
     const recBorder = document.getElementById('rec-border');
+    const countdownEl = document.getElementById('countdown');
+    const countdownLabel = document.getElementById('countdown-label');
     const loading = document.getElementById('loading');
     const loadingLabel = document.getElementById('loading-label');
     const resultPanel = document.getElementById('result-panel');
@@ -425,11 +476,14 @@
     const debug = document.getElementById('debug');
 
     let pose = null;
-    let isRecording = false;
+    let appState = 'idle'; // idle | counting | recording
     let frames = [];
     let recordingStartTime = 0;
+    let beepTime = 0;
+    let countdownTimer = null;
     let rafId = null;
     let lastAnalysis = null;
+    let audioCtx = null;
 
     function showError(title, message) {
       errorPanel.querySelector('#error-title').textContent = title;
@@ -438,6 +492,7 @@
       loading.classList.add('hidden');
     }
 
+    // --- Camera --------------------------------------------------------------
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -451,18 +506,13 @@
         });
         video.srcObject = stream;
         await new Promise((resolve) => {
-          video.onloadedmetadata = () => {
-            video.play();
-            resolve();
-          };
+          video.onloadedmetadata = () => { video.play(); resolve(); };
         });
         resizeOverlay();
         window.addEventListener('resize', resizeOverlay);
       } catch (e) {
-        showError(
-          'Camera access denied',
-          'This app needs camera access. Please allow camera access in Safari and reload.'
-        );
+        showError('Camera access denied',
+          'This app needs camera access. Please allow it and reload.');
         throw e;
       }
     }
@@ -472,6 +522,49 @@
       overlay.height = video.clientHeight;
     }
 
+    // --- Audio: short "beep" tone -------------------------------------------
+    function ensureAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      // Safari: resume if suspended (required for audio after user gesture)
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playBeep() {
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, now); // A5
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.3, now + 0.02);
+      gain.gain.linearRampToValueAtTime(0, now + 0.25);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    }
+
+    // Short "tick" for each countdown second (quieter, different pitch)
+    function playTick() {
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, now); // A4
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.12, now + 0.01);
+      gain.gain.linearRampToValueAtTime(0, now + 0.08);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    }
+
+    // --- MediaPipe Pose ------------------------------------------------------
     async function setupPose() {
       pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
@@ -491,7 +584,7 @@
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
       if (results.poseLandmarks) {
         drawSkeleton(results.poseLandmarks);
-        if (isRecording) {
+        if (appState === 'recording') {
           frames.push({
             t: performance.now() - recordingStartTime,
             landmarks: results.poseLandmarks.map(lm => ({
@@ -560,19 +653,56 @@
       rafId = requestAnimationFrame(pump);
     }
 
-    function startRecording() {
+    // --- Countdown + recording lifecycle ------------------------------------
+    function startCountdown() {
+      ensureAudio(); // MUST happen on user gesture (this click) for Safari
+      appState = 'counting';
+      let remaining = COUNTDOWN_SECONDS;
+      recordBtn.textContent = `${remaining}…`;
+      recordBtn.classList.add('counting');
+      recordBtn.disabled = true;
+      countdownEl.textContent = remaining;
+      countdownEl.classList.add('active');
+      countdownLabel.style.display = 'block';
+      recBorder.classList.add('countdown');
+      status.textContent = 'Get into your stance. Swing when the beep plays.';
+
+      playTick();
+
+      countdownTimer = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+          recordBtn.textContent = `${remaining}…`;
+          countdownEl.textContent = remaining;
+          playTick();
+        } else {
+          clearInterval(countdownTimer);
+          countdownTimer = null;
+          countdownEl.classList.remove('active');
+          countdownLabel.style.display = 'none';
+          recBorder.classList.remove('countdown');
+          beginRecording();
+        }
+      }, 1000);
+    }
+
+    function beginRecording() {
+      playBeep();
       frames = [];
       recordingStartTime = performance.now();
-      isRecording = true;
+      beepTime = 0; // beep fires at t=0 in recording time
+      appState = 'recording';
       recordBtn.textContent = 'Stop';
+      recordBtn.classList.remove('counting');
       recordBtn.classList.add('recording');
+      recordBtn.disabled = false;
       recIndicator.classList.add('active');
       recBorder.classList.add('active');
-      status.textContent = 'Recording… tap Stop after your swing.';
+      status.textContent = 'Recording… swing, then tap Stop.';
     }
 
     function stopRecording() {
-      isRecording = false;
+      appState = 'idle';
       recordBtn.textContent = 'Start';
       recordBtn.classList.remove('recording');
       recIndicator.classList.remove('active');
@@ -582,8 +712,9 @@
       setTimeout(analyze, 50);
     }
 
+    // --- Analysis ------------------------------------------------------------
     function analyze() {
-      if (frames.length < 5) {
+      if (frames.length < 10) {
         showResult({
           value: '—',
           verdict: 'Too short',
@@ -595,6 +726,7 @@
         return;
       }
 
+      // Build wrist Y trace
       const wristY = frames.map(f => {
         const lw = f.landmarks[LM.LEFT_WRIST];
         const rw = f.landmarks[LM.RIGHT_WRIST];
@@ -603,7 +735,7 @@
         if (rw.v > 0.3) return rw.y;
         return null;
       });
-
+      // Fill gaps
       let lastY = null;
       for (let i = 0; i < wristY.length; i++) {
         if (wristY[i] == null) wristY[i] = lastY;
@@ -612,11 +744,8 @@
       let firstY = wristY.find(y => y != null);
       if (firstY == null) {
         showResult({
-          value: '—',
-          verdict: 'No pose detected',
-          verdictClass: 'error',
-          wristY: [],
-          addressIdx: null, topIdx: null, impactIdx: null,
+          value: '—', verdict: 'No pose detected', verdictClass: 'error',
+          wristY: [], addressIdx: null, topIdx: null, impactIdx: null,
           diag: [['Frames captured', frames.length], ['Pose detected in', '0 frames']]
         });
         return;
@@ -625,32 +754,95 @@
         if (wristY[i] == null) wristY[i] = firstY;
       }
 
-      const smoothed = smooth(wristY, 3);
+      const smoothed = smooth(wristY, 5);
 
+      // 1) Find TOP of backswing: lowest Y value (hands highest)
       let topIdx = 0, topY = smoothed[0];
       for (let i = 1; i < smoothed.length; i++) {
         if (smoothed[i] < topY) { topY = smoothed[i]; topIdx = i; }
       }
 
-      const startY = smoothed[0];
-      const moveThreshold = (startY - topY) * 0.15;
+      // 2) Find ADDRESS: the "motion onset" frame, working backwards from the top.
+      // We compute a velocity-like measure (frame-to-frame Y change) and find
+      // the last frame BEFORE topIdx where velocity was essentially zero.
+      //
+      // Strategy: a "still" frame is one where smoothed[i] is within a small
+      // band of smoothed[i-windowsize] (i.e., almost no movement over a short
+      // window). We scan backwards from the top to find the last frame where
+      // this is true, then take the frame just after that as the motion onset.
+
+      const STILLNESS_WINDOW = 6; // frames (~200ms at 30fps)
+      const STILLNESS_THRESHOLD = Math.max(0.015, (smoothed[0] - topY) * 0.05);
+      // ^^ Either 1.5% of image height, or 5% of total rise — whichever is bigger.
+
+      // Walk backwards from topIdx looking for a sustained still period.
       let addressIdx = 0;
-      for (let i = 1; i < topIdx; i++) {
-        if (startY - smoothed[i] < moveThreshold) {
+      for (let i = topIdx - 1; i >= STILLNESS_WINDOW; i--) {
+        // Is the window [i - WINDOW, i] still?
+        let maxInWindow = -Infinity, minInWindow = Infinity;
+        for (let j = i - STILLNESS_WINDOW; j <= i; j++) {
+          if (smoothed[j] > maxInWindow) maxInWindow = smoothed[j];
+          if (smoothed[j] < minInWindow) minInWindow = smoothed[j];
+        }
+        if (maxInWindow - minInWindow < STILLNESS_THRESHOLD) {
+          // We found a stillness window ending at frame i.
+          // Address = frame right after this window (motion about to start).
           addressIdx = i;
-        } else {
           break;
         }
       }
 
-      let impactIdx = smoothed.length - 1;
+      // If we never found a stillness window (user was always moving),
+      // fall back to a simple threshold-based approach for address.
+      if (addressIdx === 0 && topIdx > 5) {
+        // Use the earliest frame whose Y is within 10% of starting position
+        // AND is followed by sustained upward motion.
+        const addressBand = (smoothed[0] - topY) * 0.10;
+        for (let i = 1; i < topIdx; i++) {
+          if (Math.abs(smoothed[i] - smoothed[0]) < addressBand) {
+            addressIdx = i;
+          } else {
+            break;
+          }
+        }
+      }
+
+      // 3) Find IMPACT: after the top, find the frame where the hands cross
+      // back through roughly the starting level on their way down. We look
+      // for the first frame after topIdx where wristY returns to within a
+      // small band of the starting Y — but we use a tighter definition than
+      // the old "fully back to start" approach: we call it "crossed address
+      // height" when smoothed[i] >= startY - impactBand.
+      //
+      // Additionally, to avoid catching mid-downswing wobbles that don't
+      // quite reach impact, we confirm by requiring the hands stay near or
+      // below that level for at least a few frames (persistence check).
+      const addressY = smoothed[addressIdx];
+      const impactBand = (addressY - topY) * 0.15; // 15% of amplitude
+      let impactIdx = -1;
+      const PERSIST_FRAMES = 3;
       for (let i = topIdx + 1; i < smoothed.length; i++) {
-        if (smoothed[i] >= startY - moveThreshold) {
-          impactIdx = i;
-          break;
+        if (smoothed[i] >= addressY - impactBand) {
+          // Check persistence: stay near-or-below for PERSIST_FRAMES more frames
+          let persists = true;
+          for (let j = i + 1; j <= i + PERSIST_FRAMES && j < smoothed.length; j++) {
+            if (smoothed[j] < addressY - impactBand * 2) { persists = false; break; }
+          }
+          if (persists) { impactIdx = i; break; }
         }
       }
+      if (impactIdx === -1) {
+        // Didn't find a clean impact — use the frame closest to address height
+        // after the top.
+        let bestDist = Infinity;
+        for (let i = topIdx + 1; i < smoothed.length; i++) {
+          const d = Math.abs(smoothed[i] - addressY);
+          if (d < bestDist) { bestDist = d; impactIdx = i; }
+        }
+        if (impactIdx === -1) impactIdx = smoothed.length - 1;
+      }
 
+      // --- Build diagnostics -------------------------------------------------
       const tAddress = frames[addressIdx].t;
       const tTop = frames[topIdx].t;
       const tImpact = frames[impactIdx].t;
@@ -659,29 +851,37 @@
       const totalMs = frames[frames.length - 1].t;
       const fps = frames.length / (totalMs / 1000);
 
+      // Time from beep to actual motion onset
+      const beepToAddressMs = tAddress - beepTime;
+
       const diag = [
         ['Frames captured', frames.length],
         ['Duration', `${(totalMs/1000).toFixed(2)} s`],
         ['Effective FPS', fps.toFixed(1)],
+        ['Beep → motion onset', `${beepToAddressMs.toFixed(0)} ms`],
         ['Address frame', `${addressIdx}  (${tAddress.toFixed(0)} ms)`],
         ['Top frame', `${topIdx}  (${tTop.toFixed(0)} ms)`],
         ['Impact frame', `${impactIdx}  (${tImpact.toFixed(0)} ms)`],
         ['Backswing', `${backswingMs.toFixed(0)} ms`],
         ['Downswing', `${downswingMs.toFixed(0)} ms`],
-        ['Start wrist Y', startY.toFixed(3)],
+        ['Address wrist Y', addressY.toFixed(3)],
         ['Top wrist Y', topY.toFixed(3)],
-        ['Wrist rise', (startY - topY).toFixed(3)]
+        ['Wrist rise', (addressY - topY).toFixed(3)]
       ];
 
+      // --- Decide verdict ----------------------------------------------------
       let ratioValue = '—';
       let verdict = '';
       let verdictClass = '';
 
-      if (topIdx - addressIdx < 2 || impactIdx - topIdx < 2) {
+      if (topIdx - addressIdx < 3 || impactIdx - topIdx < 2) {
         verdict = 'Detection failed';
         verdictClass = 'error';
-      } else if (startY - topY < 0.05) {
+      } else if (addressY - topY < 0.08) {
         verdict = 'No swing detected';
+        verdictClass = 'error';
+      } else if (backswingMs <= 0 || downswingMs <= 0) {
+        verdict = 'Detection failed';
         verdictClass = 'error';
       } else {
         const ratio = backswingMs / downswingMs;
@@ -693,9 +893,7 @@
       }
 
       showResult({
-        value: ratioValue,
-        verdict,
-        verdictClass,
+        value: ratioValue, verdict, verdictClass,
         wristY: smoothed,
         addressIdx, topIdx, impactIdx,
         diag
@@ -716,6 +914,7 @@
       return out;
     }
 
+    // --- Chart ---------------------------------------------------------------
     function drawChart(wristY, addressIdx, topIdx, impactIdx) {
       const dpr = window.devicePixelRatio || 1;
       const rect = chartCanvas.getBoundingClientRect();
@@ -741,17 +940,17 @@
       const range = Math.max(0.05, maxY - minY);
 
       const toPx = (idx) => padX + (idx / (wristY.length - 1)) * plotW;
-      // In the chart, TOP of chart = hands HIGH (small image y),
-      // BOTTOM of chart = hands LOW (large image y).
       const toPy = (y) => padY + ((y - minY) / range) * plotH;
 
-      // Grid line at start Y
-      chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.08)';
-      chartCtx.lineWidth = 1;
-      chartCtx.beginPath();
-      chartCtx.moveTo(padX, toPy(wristY[0]));
-      chartCtx.lineTo(padX + plotW, toPy(wristY[0]));
-      chartCtx.stroke();
+      // Grid line at the Address wristY value (a useful reference)
+      if (addressIdx != null && addressIdx >= 0 && addressIdx < wristY.length) {
+        chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.08)';
+        chartCtx.lineWidth = 1;
+        chartCtx.beginPath();
+        chartCtx.moveTo(padX, toPy(wristY[addressIdx]));
+        chartCtx.lineTo(padX + plotW, toPy(wristY[addressIdx]));
+        chartCtx.stroke();
+      }
 
       // Main trace
       chartCtx.strokeStyle = 'rgba(155, 197, 61, 0.9)';
@@ -763,6 +962,23 @@
         else chartCtx.lineTo(px, py);
       }
       chartCtx.stroke();
+
+      // Beep marker at frame 0 (recording started at the beep)
+      {
+        const px = toPx(0);
+        chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.35)';
+        chartCtx.lineWidth = 1;
+        chartCtx.setLineDash([2, 4]);
+        chartCtx.beginPath();
+        chartCtx.moveTo(px, padY);
+        chartCtx.lineTo(px, padY + plotH);
+        chartCtx.stroke();
+        chartCtx.setLineDash([]);
+        chartCtx.fillStyle = 'rgba(232, 228, 216, 0.7)';
+        chartCtx.font = 'bold 10px -apple-system, sans-serif';
+        chartCtx.textAlign = 'left';
+        chartCtx.fillText('Beep', px + 3, padY + 10);
+      }
 
       const events = [
         { idx: addressIdx, color: '#5dade2', label: 'A' },
@@ -818,6 +1034,7 @@
       });
 
       lastAnalysis = {
+        version: '0.1.2',
         timestamp: new Date().toISOString(),
         value, verdict,
         addressIdx, topIdx, impactIdx,
@@ -850,9 +1067,11 @@
       URL.revokeObjectURL(url);
     }
 
+    // --- Events --------------------------------------------------------------
     recordBtn.addEventListener('click', () => {
-      if (isRecording) stopRecording();
-      else startRecording();
+      if (appState === 'idle') startCountdown();
+      else if (appState === 'recording') stopRecording();
+      // ignore clicks during 'counting'
     });
 
     resultClose.addEventListener('click', () => {
@@ -861,6 +1080,7 @@
 
     resultSave.addEventListener('click', saveRawData);
 
+    // --- Boot ----------------------------------------------------------------
     (async function boot() {
       try {
         loadingLabel.textContent = 'Requesting camera…';
@@ -870,7 +1090,7 @@
         pump();
         loading.classList.add('hidden');
         recordBtn.disabled = false;
-        status.textContent = 'Ready. Tap Start.';
+        status.textContent = 'Tap Start. You have 6 seconds to get into stance.';
       } catch (e) {
         console.error(e);
         if (!errorPanel.classList.contains('visible')) {
