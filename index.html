@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.1.4</title>
+  <title>Golf Coach — v0.1.5</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -415,7 +415,6 @@
       <div id="chart-title">Wrist Height Over Time</div>
       <canvas id="chart-canvas"></canvas>
       <div id="chart-legend">
-        <div class="legend-item"><div class="legend-dot" style="background: var(--beep)"></div>Beep</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
         <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
@@ -440,15 +439,21 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.1.4
+    // Golf Coach v0.1.5
     //  - Recognizes full-swing W-shape: peak (top) → valley (impact) → peak (finish)
     //  - Picks the most prominent peak-valley-peak cycle as the real swing
     //  - Warns when multiple candidate cycles are found (possible waggle)
     //  - Ignores low-confidence wrist keypoints (visibility < 0.7) so that
     //    MediaPipe's guesses during occlusion don't create phantom dips
+    //  - Trims analysis and chart to the actual swing window (Address → Finish
+    //    + small buffer), capped at MAX_SWING_MS from Address onward. This
+    //    prevents post-swing noise from producing spurious peaks or warnings.
     // ============================================================
 
     const COUNTDOWN_SECONDS = 6;
+    const MAX_SWING_MS = 4000;        // Hard safety cap: nothing past Address + 4s is swing
+    const PRE_ADDRESS_BUFFER_MS = 300; // Keep a bit of stillness before Address in the chart
+    const POST_FINISH_BUFFER_MS = 400; // Keep a small tail after Finish in the chart
 
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
@@ -820,79 +825,67 @@
         if (rawY[i] == null) rawY[i] = firstY;
       }
 
-      const smoothed = smooth(rawY, 5);
+      const smoothedFull = smooth(rawY, 5);
 
-      // Overall range tells us what "prominent" should mean
-      const minY = Math.min(...smoothed);
-      const maxY = Math.max(...smoothed);
-      const totalRange = maxY - minY;
+      // --- PASS 1: Find a candidate swing anywhere in the recording ---------
+      // We analyze the whole trace just enough to locate where the swing is,
+      // so we can then clip to that window.
+      const fullRange = Math.max(...smoothedFull) - Math.min(...smoothedFull);
+      const minProminenceFull = Math.max(0.04, fullRange * 0.15);
+      const peaksFull = findPeaks(smoothedFull, minProminenceFull);
+      const valleysFull = findValleys(smoothedFull, minProminenceFull);
 
-      // Prominence threshold: 10% of total range, with absolute floor
-      const minProminence = Math.max(0.04, totalRange * 0.15);
+      // Find the best peak-valley-peak triple ON THE FULL TRACE, capping the
+      // peak-to-peak time so we don't pair the real Top with some late aftermath
+      // bump far outside the swing.
+      const MAX_PEAK_TO_PEAK_MS = MAX_SWING_MS; // conservative cap
 
-      const peaks = findPeaks(smoothed, minProminence);    // hands-high moments
-      const valleys = findValleys(smoothed, minProminence); // hands-low moments
+      let candidate = null;
+      let candidateScore = -1;
 
-      const warnings = [];
-
-      // --- Find the SWING: a peak → valley → peak sequence ---
-      // Strategy: among all (peak1, valley, peak2) triples where valley sits
-      // between peak1 and peak2, pick the one with highest total prominence.
-      // Then top = peak1, impact = valley, finish = peak2.
-
-      let bestTriple = null;
-      let bestScore = -1;
-
-      for (let i = 0; i < peaks.length; i++) {
-        for (let j = i + 1; j < peaks.length; j++) {
-          const p1 = peaks[i], p2 = peaks[j];
-          // Find the highest-wristY valley between them (hands lowest = impact)
+      for (let i = 0; i < peaksFull.length; i++) {
+        for (let j = i + 1; j < peaksFull.length; j++) {
+          const p1 = peaksFull[i], p2 = peaksFull[j];
+          if (frames[p2.idx].t - frames[p1.idx].t > MAX_PEAK_TO_PEAK_MS) continue;
           let bestValley = null;
-          for (const v of valleys) {
+          for (const v of valleysFull) {
             if (v.idx > p1.idx && v.idx < p2.idx) {
               if (!bestValley || v.value > bestValley.value) bestValley = v;
             }
           }
           if (!bestValley) continue;
-          // Score = combined prominence
           const score = p1.prominence + p2.prominence + bestValley.prominence;
-          if (score > bestScore) {
-            bestScore = score;
-            bestTriple = { top: p1, impact: bestValley, finish: p2 };
+          if (score > candidateScore) {
+            candidateScore = score;
+            candidate = { top: p1, impact: bestValley, finish: p2 };
           }
         }
       }
 
-      let topIdx, impactIdx, finishIdx, addressIdx;
+      // If we found no triple, handle the partial-swing / no-swing cases.
+      let pass1TopIdx, pass1ImpactIdx, pass1FinishIdx;
 
-      if (bestTriple) {
-        topIdx = bestTriple.top.idx;
-        impactIdx = bestTriple.impact.idx;
-        finishIdx = bestTriple.finish.idx;
-        if (peaks.length > 2) {
-          warnings.push(`Detected ${peaks.length} high-hand peaks; used the most prominent two. If you didn't make a full practice motion, try one continuous swing from a settled stance.`);
+      if (candidate) {
+        pass1TopIdx = candidate.top.idx;
+        pass1ImpactIdx = candidate.impact.idx;
+        pass1FinishIdx = candidate.finish.idx;
+      } else if (peaksFull.length >= 1) {
+        // Partial swing — one peak, no follow-through
+        pass1TopIdx = peaksFull[0].idx;
+        pass1FinishIdx = null;
+        let lowest = null;
+        for (let i = pass1TopIdx + 1; i < smoothedFull.length; i++) {
+          if (lowest == null || smoothedFull[i] > smoothedFull[lowest]) lowest = i;
         }
-      } else if (peaks.length === 1) {
-        // Only one peak found — this is a partial swing (no follow-through)
-        // Fall back to the older approach: top is the peak, impact is the
-        // lowest point after the peak.
-        topIdx = peaks[0].idx;
-        finishIdx = null;
-        let candidate = null;
-        for (let i = topIdx + 1; i < smoothed.length; i++) {
-          if (!candidate || smoothed[i] > smoothed[candidate]) candidate = i;
-        }
-        impactIdx = candidate != null ? candidate : smoothed.length - 1;
-        warnings.push('Only one peak detected — this looks like a partial swing with no follow-through. For full swings, swing all the way through to the finish position.');
+        pass1ImpactIdx = lowest != null ? lowest : smoothedFull.length - 1;
       } else {
-        // No prominent peaks at all
         showResult({
           value: '—', verdict: 'No swing detected', verdictClass: 'error',
-          wristY: smoothed,
+          wristY: smoothedFull,
           addressIdx: 0, topIdx: null, impactIdx: null, finishIdx: null,
           diag: [
             ['Frames captured', frames.length],
-            ['wristY range', totalRange.toFixed(3)],
+            ['wristY range', fullRange.toFixed(3)],
             ['Prominent peaks found', 0]
           ],
           warnings: ['No clear swing motion detected. Make sure your whole body (including arms raised at the top of your swing) stays in frame.']
@@ -900,44 +893,152 @@
         return;
       }
 
-      // --- Find ADDRESS: motion onset before Top ---
-      // Look for the last period of stillness before topIdx.
+      // Find Address (motion onset before Top) using the full trace
       const STILLNESS_WINDOW = 6;
-      const topY = smoothed[topIdx];
-      const stillnessThreshold = Math.max(0.015, (smoothed[0] - topY) * 0.05);
+      const pass1TopY = smoothedFull[pass1TopIdx];
+      const stillnessThresholdP1 = Math.max(0.015, (smoothedFull[0] - pass1TopY) * 0.05);
+      let pass1AddressIdx = 0;
+      for (let i = pass1TopIdx - 1; i >= STILLNESS_WINDOW; i--) {
+        let mx = -Infinity, mn = Infinity;
+        for (let j = i - STILLNESS_WINDOW; j <= i; j++) {
+          if (smoothedFull[j] > mx) mx = smoothedFull[j];
+          if (smoothedFull[j] < mn) mn = smoothedFull[j];
+        }
+        if (mx - mn < stillnessThresholdP1) { pass1AddressIdx = i; break; }
+      }
+      if (pass1AddressIdx === 0 && pass1TopIdx > 8) {
+        const band = (smoothedFull[0] - pass1TopY) * 0.10;
+        for (let i = 1; i < pass1TopIdx; i++) {
+          if (Math.abs(smoothedFull[i] - smoothedFull[0]) < band) pass1AddressIdx = i;
+          else break;
+        }
+      }
+
+      // --- Determine the swing window (indices to keep for PASS 2) -----------
+      const tAddressP1 = frames[pass1AddressIdx].t;
+      const windowStartMs = tAddressP1 - PRE_ADDRESS_BUFFER_MS;
+      // Cap: Address + MAX_SWING_MS + a buffer for the post-finish tail
+      const windowEndMs = tAddressP1 + MAX_SWING_MS;
+      // But if Finish was found and is before windowEndMs, we use Finish + buffer
+      let chosenEndMs;
+      if (pass1FinishIdx != null) {
+        chosenEndMs = Math.min(windowEndMs, frames[pass1FinishIdx].t + POST_FINISH_BUFFER_MS);
+      } else {
+        chosenEndMs = windowEndMs;
+      }
+
+      // Translate ms range into frame indices
+      let clipStart = 0, clipEnd = frames.length - 1;
+      for (let i = 0; i < frames.length; i++) {
+        if (frames[i].t <= windowStartMs) clipStart = i;
+      }
+      for (let i = frames.length - 1; i >= 0; i--) {
+        if (frames[i].t >= chosenEndMs) clipEnd = i;
+      }
+      if (clipEnd <= clipStart) clipEnd = frames.length - 1; // safety
+
+      // --- PASS 2: Re-detect events on the clipped trace ---------------------
+      const clippedWristY = smoothedFull.slice(clipStart, clipEnd + 1);
+      const clippedFrames = frames.slice(clipStart, clipEnd + 1);
+      const clippedRange = Math.max(...clippedWristY) - Math.min(...clippedWristY);
+      const minProminenceClip = Math.max(0.04, clippedRange * 0.15);
+      const peaksClip = findPeaks(clippedWristY, minProminenceClip);
+      const valleysClip = findValleys(clippedWristY, minProminenceClip);
+
+      const warnings = [];
+      let topIdx, impactIdx, finishIdx, addressIdx;
+
+      // Find the best peak-valley-peak triple on the clipped trace
+      let clipCandidate = null;
+      let clipScore = -1;
+      for (let i = 0; i < peaksClip.length; i++) {
+        for (let j = i + 1; j < peaksClip.length; j++) {
+          const p1 = peaksClip[i], p2 = peaksClip[j];
+          let bestValley = null;
+          for (const v of valleysClip) {
+            if (v.idx > p1.idx && v.idx < p2.idx) {
+              if (!bestValley || v.value > bestValley.value) bestValley = v;
+            }
+          }
+          if (!bestValley) continue;
+          const score = p1.prominence + p2.prominence + bestValley.prominence;
+          if (score > clipScore) {
+            clipScore = score;
+            clipCandidate = { top: p1, impact: bestValley, finish: p2 };
+          }
+        }
+      }
+
+      if (clipCandidate) {
+        topIdx = clipCandidate.top.idx;
+        impactIdx = clipCandidate.impact.idx;
+        finishIdx = clipCandidate.finish.idx;
+        if (peaksClip.length > 2) {
+          warnings.push(`Detected ${peaksClip.length} high-hand peaks; used the most prominent two. If you didn't make a full practice motion, try one continuous swing from a settled stance.`);
+        }
+      } else if (peaksClip.length === 1) {
+        topIdx = peaksClip[0].idx;
+        finishIdx = null;
+        let lowest = null;
+        for (let i = topIdx + 1; i < clippedWristY.length; i++) {
+          if (lowest == null || clippedWristY[i] > clippedWristY[lowest]) lowest = i;
+        }
+        impactIdx = lowest != null ? lowest : clippedWristY.length - 1;
+        warnings.push('Only one peak detected — this looks like a partial swing with no follow-through. For full swings, swing all the way through to the finish position.');
+      } else {
+        // Shouldn't happen (we already found pass1 events), but fail safe
+        showResult({
+          value: '—', verdict: 'Detection failed', verdictClass: 'error',
+          wristY: clippedWristY,
+          addressIdx: null, topIdx: null, impactIdx: null, finishIdx: null,
+          diag: [['Frames captured', frames.length]],
+          warnings: ['Could not re-detect swing events in the clipped window.']
+        });
+        return;
+      }
+
+      // Find Address on the clipped trace
+      const topYClip = clippedWristY[topIdx];
+      const stillnessThresholdC = Math.max(0.015, (clippedWristY[0] - topYClip) * 0.05);
       addressIdx = 0;
       for (let i = topIdx - 1; i >= STILLNESS_WINDOW; i--) {
         let mx = -Infinity, mn = Infinity;
         for (let j = i - STILLNESS_WINDOW; j <= i; j++) {
-          if (smoothed[j] > mx) mx = smoothed[j];
-          if (smoothed[j] < mn) mn = smoothed[j];
+          if (clippedWristY[j] > mx) mx = clippedWristY[j];
+          if (clippedWristY[j] < mn) mn = clippedWristY[j];
         }
-        if (mx - mn < stillnessThreshold) { addressIdx = i; break; }
+        if (mx - mn < stillnessThresholdC) { addressIdx = i; break; }
       }
-      // Fallback if no clear stillness window
       if (addressIdx === 0 && topIdx > 8) {
-        const band = (smoothed[0] - topY) * 0.10;
+        const band = (clippedWristY[0] - topYClip) * 0.10;
         for (let i = 1; i < topIdx; i++) {
-          if (Math.abs(smoothed[i] - smoothed[0]) < band) addressIdx = i;
+          if (Math.abs(clippedWristY[i] - clippedWristY[0]) < band) addressIdx = i;
           else break;
         }
       }
 
       // --- Compute timings ---
-      const tAddress = frames[addressIdx].t;
-      const tTop = frames[topIdx].t;
-      const tImpact = frames[impactIdx].t;
-      const tFinish = finishIdx != null ? frames[finishIdx].t : null;
+      const tAddress = clippedFrames[addressIdx].t;
+      const tTop = clippedFrames[topIdx].t;
+      const tImpact = clippedFrames[impactIdx].t;
+      const tFinish = finishIdx != null ? clippedFrames[finishIdx].t : null;
       const backswingMs = tTop - tAddress;
       const downswingMs = tImpact - tTop;
       const totalMs = frames[frames.length - 1].t;
       const fps = frames.length / (totalMs / 1000);
       const beepToAddressMs = tAddress - beepTime;
+      const clippedDurationMs = clippedFrames[clippedFrames.length - 1].t - clippedFrames[0].t;
+
+      // If we hit the MAX_SWING_MS cap, flag it
+      if (pass1FinishIdx != null && frames[pass1FinishIdx].t > tAddressP1 + MAX_SWING_MS) {
+        warnings.push(`Swing took longer than ${(MAX_SWING_MS/1000).toFixed(0)}s — analysis window was capped. Results may be incomplete.`);
+      }
 
       const diag = [
         ['Frames captured', frames.length],
-        ['Duration', `${(totalMs/1000).toFixed(2)} s`],
+        ['Recording duration', `${(totalMs/1000).toFixed(2)} s`],
         ['Effective FPS', fps.toFixed(1)],
+        ['Analyzed window', `${(clippedDurationMs/1000).toFixed(2)} s`],
         ['Beep → motion onset', `${beepToAddressMs.toFixed(0)} ms`],
         ['Address frame', `${addressIdx}  (${tAddress.toFixed(0)} ms)`],
         ['Top frame', `${topIdx}  (${tTop.toFixed(0)} ms)`],
@@ -946,9 +1047,9 @@
       if (finishIdx != null) diag.push(['Finish frame', `${finishIdx}  (${tFinish.toFixed(0)} ms)`]);
       diag.push(['Backswing', `${backswingMs.toFixed(0)} ms`]);
       diag.push(['Downswing', `${downswingMs.toFixed(0)} ms`]);
-      diag.push(['Peaks found', peaks.length]);
-      diag.push(['Valleys found', valleys.length]);
-      diag.push(['Wrist rise', (smoothed[addressIdx] - topY).toFixed(3)]);
+      diag.push(['Peaks found (in window)', peaksClip.length]);
+      diag.push(['Valleys found (in window)', valleysClip.length]);
+      diag.push(['Wrist rise', (clippedWristY[addressIdx] - topYClip).toFixed(3)]);
 
       // --- Verdict ---
       let ratioValue = '—';
@@ -958,7 +1059,7 @@
       if (backswingMs <= 0 || downswingMs <= 0) {
         verdict = 'Detection failed';
         verdictClass = 'error';
-      } else if (smoothed[addressIdx] - topY < 0.08) {
+      } else if (clippedWristY[addressIdx] - topYClip < 0.08) {
         verdict = 'No swing detected';
         verdictClass = 'error';
       } else {
@@ -972,7 +1073,7 @@
 
       showResult({
         value: ratioValue, verdict, verdictClass,
-        wristY: smoothed,
+        wristY: clippedWristY,
         addressIdx, topIdx, impactIdx, finishIdx,
         diag, warnings
       });
@@ -1037,22 +1138,9 @@
       }
       chartCtx.stroke();
 
-      // Beep marker
-      {
-        const px = toPx(0);
-        chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.35)';
-        chartCtx.lineWidth = 1;
-        chartCtx.setLineDash([2, 4]);
-        chartCtx.beginPath();
-        chartCtx.moveTo(px, padY);
-        chartCtx.lineTo(px, padY + plotH);
-        chartCtx.stroke();
-        chartCtx.setLineDash([]);
-        chartCtx.fillStyle = 'rgba(232, 228, 216, 0.7)';
-        chartCtx.font = 'bold 10px -apple-system, sans-serif';
-        chartCtx.textAlign = 'left';
-        chartCtx.fillText('Beep', px + 3, padY + 10);
-      }
+      // (Beep marker removed in v0.1.5 — the chart now shows the clipped swing
+      // window, not the full recording, so the beep is usually before the chart
+      // start. The "Beep → motion onset" time is still in the diagnostics.)
 
       const events = [
         { idx: addressIdx, color: '#5dade2', label: 'A' },
@@ -1111,12 +1199,12 @@
       });
 
       lastAnalysis = {
-        version: '0.1.4',
+        version: '0.1.5',
         timestamp: new Date().toISOString(),
         value, verdict,
         addressIdx, topIdx, impactIdx, finishIdx,
-        wristY,
-        frames: frames.map(f => ({
+        wristY,  // clipped — matches what's shown on the chart and what the indices refer to
+        frames: frames.map(f => ({  // full raw frames, not clipped — for deeper debugging
           t: f.t,
           leftWrist: f.landmarks[LM.LEFT_WRIST],
           rightWrist: f.landmarks[LM.RIGHT_WRIST],
