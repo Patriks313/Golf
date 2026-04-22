@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.2.0</title>
+  <title>Golf Coach — v0.2.1</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -122,6 +122,29 @@
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     @keyframes pulse-slow { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
 
+    /* v0.2.1: transient "shape heard" pill bottom-center */
+    #shape-heard {
+      position: absolute;
+      bottom: calc(env(safe-area-inset-bottom, 16px) + 16px);
+      left: 50%;
+      transform: translateX(-50%) translateY(8px);
+      opacity: 0;
+      pointer-events: none;
+      padding: 8px 18px;
+      background: rgba(0, 0, 0, 0.65);
+      border: 1px solid rgba(155, 197, 61, 0.55);
+      border-radius: 22px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: var(--accent);
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    #shape-heard.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
     #rec-border {
       position: absolute;
       inset: 0;
@@ -217,7 +240,7 @@
       letter-spacing: 0.3px;
     }
 
-    #voice-toggle {
+    #voice-toggle, #shape-toggle {
       position: relative;
       width: 44px;
       height: 26px;
@@ -228,9 +251,9 @@
       transition: background 0.15s;
     }
 
-    #voice-toggle.on { background: var(--accent); }
+    #voice-toggle.on, #shape-toggle.on { background: var(--accent); }
 
-    #voice-toggle::after {
+    #voice-toggle::after, #shape-toggle::after {
       content: '';
       position: absolute;
       top: 3px; left: 3px;
@@ -240,9 +263,9 @@
       transition: transform 0.15s;
     }
 
-    #voice-toggle.on::after { transform: translateX(18px); }
+    #voice-toggle.on::after, #shape-toggle.on::after { transform: translateX(18px); }
 
-    #voice-toggle.disabled {
+    #voice-toggle.disabled, #shape-toggle.disabled {
       opacity: 0.45;
       cursor: not-allowed;
     }
@@ -461,6 +484,7 @@
       </div>
       <div id="countdown">6</div>
       <div id="countdown-label">Get into your stance</div>
+      <div id="shape-heard"></div>
       <div id="debug"></div>
     </div>
 
@@ -470,6 +494,10 @@
       <div id="voice-row">
         <label for="voice-toggle">Voice trigger (say &ldquo;ready&rdquo;)</label>
         <div id="voice-toggle" class="on" role="switch" aria-checked="true" tabindex="0"></div>
+      </div>
+      <div id="voice-row">
+        <label for="shape-toggle">Shape reporting (say &ldquo;pull&rdquo;, &ldquo;straight&rdquo;, &hellip;)</label>
+        <div id="shape-toggle" role="switch" aria-checked="false" tabindex="0"></div>
       </div>
     </div>
   </div>
@@ -516,17 +544,16 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.2.0
+    // Golf Coach v0.2.1
     //
-    // Changes from v0.1.6 (surgical — the analysis pipeline is byte-identical):
-    //   + Voice trigger: say "ready" to start the countdown (replaces tap)
-    //   + Web Speech API, continuous, auto-restart on end (iOS Safari defense)
-    //   + Recognition runs only in 'idle' state — pauses during countdown/recording
-    //   + On-screen "listening" indicator
-    //   + Voice toggle to fall back to tap if mic misbehaves
-    //   + Tap Start still works as before
+    // Changes from v0.2.0:
+    //   + Hands-free session loop: recording auto-stops after RECORDING_DURATION_MS
+    //   + New 'waiting' state after analysis: listens for shape words OR "ready"
+    //   + Shape reporting toggle — when on, listens for 6 shape words between swings
+    //   + Shape logged silently into swing record (no per-swing UI, per brief)
+    //   + "ready" during waiting state dismisses result panel and starts next countdown
     //
-    // Unchanged from v0.1.6:
+    // Unchanged from v0.2.0 / v0.1.6:
     //   - Pinned MediaPipe Pose @0.5.1675469404
     //   - Camera, pose pump, drawing, audio tones, tempo analysis, chart, result UI
     // ============================================================
@@ -539,6 +566,11 @@
 
     // v0.2 voice-trigger tunables
     const MIC_RESTART_DELAY_MS = 400;
+
+    // v0.2.1 hands-free loop tunables
+    const RECORDING_DURATION_MS = 3000;        // auto-stop recording 3s after beep
+    const SHAPE_HEARD_FLASH_MS   = 1400;       // how long the "heard: pull" pill shows
+    const SHAPE_WORDS = ['straight', 'pull', 'push', 'hook', 'slice', 'bad'];
 
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
@@ -566,6 +598,8 @@
     // v0.2 additions
     const listenIndicator = document.getElementById('listen-indicator');
     const voiceToggle = document.getElementById('voice-toggle');
+    const shapeToggle = document.getElementById('shape-toggle');
+    const shapeHeardEl = document.getElementById('shape-heard');
 
     let pose = null;
     let appState = 'idle';
@@ -583,6 +617,12 @@
     let voiceEnabled = true;
     let voiceSupported = true;
     let micRestartPending = false;
+
+    // v0.2.1 hands-free loop state
+    let shapeEnabled = false;         // controlled by shape-toggle
+    let recordingAutoStopTimer = null;
+    let shapeHeardTimer = null;
+    let pendingShape = null;          // shape captured for the most recent swing
 
     function showError(title, message) {
       errorPanel.querySelector('#error-title').textContent = title;
@@ -756,7 +796,7 @@
 
       recognition.onstart = () => {
         recognitionRunning = true;
-        if (appState === 'idle' && voiceEnabled) {
+        if ((appState === 'idle' || appState === 'waiting') && voiceEnabled) {
           listenIndicator.classList.add('active');
         }
       };
@@ -765,11 +805,13 @@
         recognitionRunning = false;
         listenIndicator.classList.remove('active');
         // Auto-restart if we still want to be listening (iOS Safari silently stops on silence)
-        if (appState === 'idle' && voiceEnabled && !micRestartPending) {
+        const shouldListen = (appState === 'idle' || appState === 'waiting') && voiceEnabled;
+        if (shouldListen && !micRestartPending) {
           micRestartPending = true;
           setTimeout(() => {
             micRestartPending = false;
-            if (appState === 'idle' && voiceEnabled) startRecognition();
+            const stillShouldListen = (appState === 'idle' || appState === 'waiting') && voiceEnabled;
+            if (stillShouldListen) startRecognition();
           }, MIC_RESTART_DELAY_MS);
         }
       };
@@ -786,14 +828,33 @@
       };
 
       recognition.onresult = (ev) => {
-        if (appState !== 'idle' || !voiceEnabled) return;
+        if (!voiceEnabled) return;
+        if (appState !== 'idle' && appState !== 'waiting') return;
+
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
           const r = ev.results[i];
           for (let a = 0; a < r.length; a++) {
             const text = r[a].transcript.toLowerCase().trim();
+
+            // "ready" works in both idle and waiting. In waiting it means
+            // "I'm done with this swing, let's start the next one."
             if (matchesReady(text)) {
-              onVoiceReady();
+              if (appState === 'waiting') onReadyInWaitingState();
+              else onVoiceReady();
               return;
+            }
+
+            // Shape words only count in the waiting state, and only when
+            // the shape toggle is on.
+            if (appState === 'waiting' && shapeEnabled) {
+              const shape = matchesShapeWord(text);
+              if (shape) {
+                onShapeHeard(shape);
+                // don't return — keep scanning in case "ready" follows in the
+                // same result batch. But most of the time this ends the loop
+                // for this event.
+                return;
+              }
             }
           }
         }
@@ -807,10 +868,58 @@
       return / ready /.test(padded) || / reddy /.test(padded) || / redi /.test(padded);
     }
 
+    // v0.2.1: match one of the 6 shape words as a whole word.
+    // Returns the canonical word on match, or null.
+    function matchesShapeWord(text) {
+      const padded = ' ' + text.replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ') + ' ';
+      for (const word of SHAPE_WORDS) {
+        const re = new RegExp(' ' + word + ' ');
+        if (re.test(padded)) return word;
+      }
+      // A couple of common mishears for "bad" (bad contact) — conservative.
+      if (/ bat | bud /.test(padded)) return 'bad';
+      return null;
+    }
+
+    function onShapeHeard(word) {
+      pendingShape = word;
+      // Fold into lastAnalysis if it exists, so "Save Raw Data" picks it up.
+      if (lastAnalysis) lastAnalysis.shape = word;
+      showShapeHeardPill(word);
+    }
+
+    function showShapeHeardPill(word) {
+      shapeHeardEl.textContent = 'heard: ' + word;
+      shapeHeardEl.classList.add('visible');
+      if (shapeHeardTimer) clearTimeout(shapeHeardTimer);
+      shapeHeardTimer = setTimeout(() => {
+        shapeHeardEl.classList.remove('visible');
+      }, SHAPE_HEARD_FLASH_MS);
+    }
+
+    function onReadyInWaitingState() {
+      // "ready" while the result panel is showing means: we're done reviewing,
+      // start the next swing. Dismiss the panel and go straight into countdown.
+      // pendingShape (if any) was already captured in lastAnalysis.
+      stopRecognition();
+      listenIndicator.classList.remove('active');
+      resultPanel.classList.remove('visible');
+      startCountdown();
+    }
+
     function startRecognition() {
-      if (!recognition || recognitionRunning || !voiceEnabled) return;
-      try { recognition.start(); }
-      catch (_) { /* "InvalidStateError" if already started — ignore */ }
+      if (!recognition || !voiceEnabled) return;
+      // Don't gate on recognitionRunning — the flag can lag reality on mobile.
+      // Just try to start; if it's already running, catch the InvalidStateError.
+      try {
+        recognition.start();
+      } catch (e) {
+        // "InvalidStateError" means it's already started — benign, ignore.
+        // Anything else: log to debug so we can see it on device.
+        if (e && e.name !== 'InvalidStateError') {
+          debug.textContent = 'rec.start err: ' + e.name;
+        }
+      }
     }
 
     function stopRecognition() {
@@ -852,6 +961,10 @@
       ensureAudio();
       stopRecognition(); // v0.2: don't listen during countdown
       listenIndicator.classList.remove('active');
+      // v0.2.1: if we came from waiting state, clear residual UI
+      resultPanel.classList.remove('visible');
+      shapeHeardEl.classList.remove('visible');
+      if (shapeHeardTimer) { clearTimeout(shapeHeardTimer); shapeHeardTimer = null; }
       appState = 'counting';
       let remaining = COUNTDOWN_SECONDS;
       recordBtn.textContent = `${remaining}…`;
@@ -885,6 +998,7 @@
       frames = [];
       recordingStartTime = performance.now();
       beepTime = 0;
+      pendingShape = null;
       appState = 'recording';
       recordBtn.textContent = 'Stop';
       recordBtn.classList.remove('counting');
@@ -892,10 +1006,23 @@
       recordBtn.disabled = false;
       recIndicator.classList.add('active');
       recBorder.classList.add('active');
-      status.textContent = 'Recording… swing, then tap Stop.';
+      status.textContent = `Recording… (auto-stops in ${(RECORDING_DURATION_MS/1000).toFixed(0)}s)`;
+
+      // v0.2.1: auto-stop the recording. This is what makes the session hands-free.
+      // Tap Stop still works — it fires stopRecording early and clears the timer.
+      if (recordingAutoStopTimer) clearTimeout(recordingAutoStopTimer);
+      recordingAutoStopTimer = setTimeout(() => {
+        recordingAutoStopTimer = null;
+        if (appState === 'recording') stopRecording();
+      }, RECORDING_DURATION_MS);
     }
 
     function stopRecording() {
+      // Clear any pending auto-stop timer — safe whether called by timer or user.
+      if (recordingAutoStopTimer) {
+        clearTimeout(recordingAutoStopTimer);
+        recordingAutoStopTimer = null;
+      }
       appState = 'idle';
       recordBtn.textContent = 'Start';
       recordBtn.classList.remove('recording');
@@ -1242,15 +1369,15 @@
         diagnostics.appendChild(row);
       }
       resultPanel.classList.add('visible');
-      status.textContent = voiceEnabled ? 'Tap Start, or say “ready”, for next swing.' : 'Tap Start for next swing.';
       requestAnimationFrame(() => {
         drawChart(wristY, addressIdx, topIdx, impactIdx, finishIdx);
       });
 
       lastAnalysis = {
-        version: '0.2.0',
+        version: '0.2.1',
         timestamp: new Date().toISOString(),
         value, verdict,
+        shape: pendingShape,         // v0.2.1: populated later if user calls out a shape
         addressIdx, topIdx, impactIdx, finishIdx,
         wristY,
         frames: frames.map(f => ({
@@ -1264,6 +1391,20 @@
           nose: f.landmarks[LM.NOSE]
         }))
       };
+
+      // v0.2.1: enter the 'waiting' state — recognition listens for shape
+      // words OR "ready" to start the next swing. This is what makes the
+      // session hands-free across multiple swings.
+      appState = 'waiting';
+      if (voiceEnabled) {
+        const hint = shapeEnabled
+          ? 'Say the shape (pull, straight, …) or “ready” for next swing.'
+          : 'Say “ready” for next swing, or tap Next Swing.';
+        status.textContent = hint;
+        startRecognition();
+      } else {
+        status.textContent = 'Tap Next Swing when ready.';
+      }
     }
 
     function saveRawData() {
@@ -1285,14 +1426,24 @@
       ensureAudio();
       if (appState === 'idle') {
         startCountdown();
+      } else if (appState === 'waiting') {
+        // same behavior as "Next Swing" — panel may be open
+        resultPanel.classList.remove('visible');
+        startCountdown();
       } else if (appState === 'recording') {
         stopRecording();
       }
     });
 
     resultClose.addEventListener('click', () => {
+      // "Next Swing" — close panel and go straight into countdown, same as
+      // saying "ready" in the waiting state.
       resultPanel.classList.remove('visible');
-      if (appState === 'idle' && voiceEnabled) startRecognition();
+      if (appState === 'waiting') {
+        startCountdown();
+      } else if (appState === 'idle' && voiceEnabled) {
+        startRecognition();
+      }
     });
 
     resultSave.addEventListener('click', saveRawData);
@@ -1304,6 +1455,16 @@
     });
     voiceToggle.addEventListener('keydown', (e) => {
       if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); voiceToggle.click(); }
+    });
+
+    // v0.2.1: shape toggle — purely local state, affects onresult routing.
+    shapeToggle.addEventListener('click', () => {
+      shapeEnabled = !shapeEnabled;
+      shapeToggle.classList.toggle('on', shapeEnabled);
+      shapeToggle.setAttribute('aria-checked', shapeEnabled ? 'true' : 'false');
+    });
+    shapeToggle.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); shapeToggle.click(); }
     });
 
     (async function boot() {
