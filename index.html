@@ -1,1000 +1,1335 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Golf Coach — Tempo (v0.2)</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg:       #0f1412;
-    --panel:    #161d1a;
-    --ink:      #e8efe9;
-    --ink-dim:  #8fa196;
-    --accent:   #9dd69a;  /* muted fairway */
-    --warn:     #e2b24a;  /* soft amber */
-    --bad:      #d87a7a;  /* soft red */
-    --line:     #26322d;
-    --listening:#6fb4ff;  /* distinct from pass/fail to avoid misreading */
-  }
-  *, *::before, *::after { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
-  body {
-    font-family: "Fraunces", Georgia, serif;
-    font-size: 17px;
-    line-height: 1.45;
-    min-height: 100dvh;
-    padding: 16px;
-    padding-bottom: calc(16px + env(safe-area-inset-bottom));
-  }
-  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Golf Coach — v0.2.0</title>
+  <style>
+    :root {
+      --bg: #0f1712;
+      --fg: #e8e4d8;
+      --dim: #8a8778;
+      --accent: #9bc53d;
+      --warn: #e5a823;
+      --error: #d95f43;
+      --rec: #e74c3c;
+      --listen: #6fb4ff;
+      --address: #5dade2;
+      --top: #af7ac5;
+      --impact: #f39c12;
+      --finish: #ec87c0;
+    }
 
-  header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-  header h1 {
-    font-size: 20px;
-    font-weight: 600;
-    margin: 0;
-    letter-spacing: -0.01em;
-  }
-  header .ver {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 12px;
-    color: var(--ink-dim);
-  }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
-  .stage {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 3 / 4;
-    background: #000;
-    border-radius: 14px;
-    overflow: hidden;
-    border: 1px solid var(--line);
-  }
-  .stage video, .stage canvas {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-  .stage video { transform: scaleX(-1); } /* mirror front camera */
-  .stage canvas { pointer-events: none; }
+    html, body {
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
 
-  /* overlay indicators */
-  .badge {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    background: rgba(0,0,0,0.55);
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 999px;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 12px;
-    letter-spacing: 0.02em;
-    color: var(--ink);
-  }
-  .dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--ink-dim);
-  }
-  .dot.idle      { background: var(--ink-dim); }
-  .dot.listening { background: var(--listening); animation: pulse 1.2s ease-in-out infinite; }
-  .dot.countdown { background: var(--warn); }
-  .dot.recording { background: var(--bad); }
-  .dot.analyzing { background: var(--warn); }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50%      { opacity: .35; transform: scale(.85); }
-  }
+    #app {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+    }
 
-  .countdown-big {
-    position: absolute;
-    inset: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    font-family: "JetBrains Mono", monospace;
-    font-size: clamp(80px, 22vw, 160px);
-    color: rgba(232,239,233,0.92);
-    text-shadow: 0 4px 20px rgba(0,0,0,0.6);
-    pointer-events: none;
-  }
-  .countdown-big.on { display: flex; }
+    #video-container {
+      position: relative;
+      flex: 1;
+      background: #000;
+      overflow: hidden;
+    }
 
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 14px;
-    margin-top: 12px;
-  }
-  .panel h2 {
-    margin: 0 0 8px 0;
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--ink-dim);
-  }
+    #video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
 
-  .controls {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-top: 12px;
-  }
-  button {
-    font-family: inherit;
-    font-size: 15px;
-    padding: 14px 16px;
-    border-radius: 10px;
-    border: 1px solid var(--line);
-    background: var(--panel);
-    color: var(--ink);
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  button.primary {
-    background: var(--accent);
-    color: #0f1412;
-    border-color: var(--accent);
-    font-weight: 600;
-  }
-  button.danger {
-    background: var(--bad);
-    color: #1b0f0f;
-    border-color: var(--bad);
-    font-weight: 600;
-  }
-  button:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
+    #overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
 
-  .row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .row + .row { margin-top: 8px; }
+    #rec-indicator {
+      position: absolute;
+      top: env(safe-area-inset-top, 16px);
+      left: 16px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
 
-  .stat {
-    display: inline-flex;
-    flex-direction: column;
-    padding: 8px 12px;
-    background: #0f1412;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    min-width: 90px;
-  }
-  .stat .label {
-    font-size: 11px;
-    color: var(--ink-dim);
-    font-family: "JetBrains Mono", monospace;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .stat .value {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 18px;
-    font-weight: 600;
-    margin-top: 2px;
-  }
-  .stat.pass .value { color: var(--accent); }
-  .stat.fail .value { color: var(--bad); }
+    #rec-indicator.active { display: flex; }
 
-  .log {
-    max-height: 140px;
-    overflow-y: auto;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 12px;
-    line-height: 1.55;
-    color: var(--ink-dim);
-    background: #0b0f0d;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 10px;
-    white-space: pre-wrap;
-  }
+    #rec-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--rec);
+      animation: pulse 1s infinite;
+    }
 
-  #chart {
-    width: 100%;
-    height: 140px;
-    background: #0b0f0d;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    display: block;
-  }
+    /* v0.2: listening indicator, distinct from REC */
+    #listen-indicator {
+      position: absolute;
+      top: env(safe-area-inset-top, 16px);
+      right: 16px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      color: var(--fg);
+    }
 
-  .hint {
-    font-size: 13px;
-    color: var(--ink-dim);
-    margin: 6px 0 0 0;
-  }
+    #listen-indicator.active { display: flex; }
 
-  .toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--ink-dim);
-    cursor: pointer;
-  }
-  .toggle input { accent-color: var(--accent); }
+    #listen-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--listen);
+      animation: pulse-slow 1.4s ease-in-out infinite;
+    }
 
-  footer {
-    margin-top: 20px;
-    font-size: 12px;
-    color: var(--ink-dim);
-    text-align: center;
-    font-family: "JetBrains Mono", monospace;
-  }
-</style>
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes pulse-slow { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
+
+    #rec-border {
+      position: absolute;
+      inset: 0;
+      border: 4px solid transparent;
+      pointer-events: none;
+      transition: border-color 0.2s;
+    }
+
+    #rec-border.active { border-color: var(--rec); }
+    #rec-border.countdown { border-color: var(--accent); }
+
+    #countdown {
+      position: absolute;
+      inset: 0;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      font-size: min(30vw, 240px);
+      font-weight: 700;
+      color: var(--accent);
+      text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+      pointer-events: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #countdown.active { display: flex; }
+
+    #countdown-label {
+      position: absolute;
+      bottom: 15%;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 18px;
+      font-weight: 400;
+      color: var(--fg);
+      text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+      letter-spacing: 1px;
+      display: none;
+    }
+
+    #controls {
+      padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #status {
+      text-align: center;
+      font-size: 14px;
+      color: var(--dim);
+      min-height: 20px;
+      letter-spacing: 0.3px;
+    }
+
+    #record-btn {
+      width: 100%;
+      padding: 20px;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      border: none;
+      border-radius: 12px;
+      background: var(--accent);
+      color: var(--bg);
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    #record-btn:active { transform: scale(0.98); }
+    #record-btn.recording { background: var(--rec); color: #fff; }
+    #record-btn.counting { background: var(--warn); color: var(--bg); }
+    #record-btn:disabled {
+      background: var(--dim);
+      color: rgba(0,0,0,0.4);
+      cursor: not-allowed;
+    }
+
+    /* v0.2: voice toggle row */
+    #voice-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 2px 4px;
+    }
+
+    #voice-row label {
+      font-size: 13px;
+      color: var(--dim);
+      letter-spacing: 0.3px;
+    }
+
+    #voice-toggle {
+      position: relative;
+      width: 44px;
+      height: 26px;
+      background: #3a3f3a;
+      border-radius: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+
+    #voice-toggle.on { background: var(--accent); }
+
+    #voice-toggle::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 20px; height: 20px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.15s;
+    }
+
+    #voice-toggle.on::after { transform: translateX(18px); }
+
+    #voice-toggle.disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    #result-panel {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      padding: 24px 20px calc(env(safe-area-inset-bottom, 20px) + 20px);
+      flex-direction: column;
+      z-index: 10;
+      overflow-y: auto;
+    }
+
+    #result-panel.visible { display: flex; }
+
+    #result-header { text-align: center; margin-bottom: 16px; }
+
+    #result-label {
+      font-size: 12px;
+      color: var(--dim);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    #result-value {
+      font-size: 56px;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 8px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #result-verdict { font-size: 16px; color: var(--fg); }
+    #result-verdict.good { color: var(--accent); }
+    #result-verdict.off { color: var(--warn); }
+    #result-verdict.error { color: var(--error); }
+
+    #warnings {
+      margin: 12px 0;
+      padding: 10px 14px;
+      background: rgba(229, 168, 35, 0.12);
+      border-left: 3px solid var(--warn);
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--fg);
+      display: none;
+    }
+
+    #warnings.visible { display: block; }
+
+    #chart-section { margin: 16px 0; }
+
+    #chart-title {
+      font-size: 11px;
+      color: var(--dim);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    #chart-canvas {
+      width: 100%;
+      height: 180px;
+      background: #1a2420;
+      border-radius: 8px;
+      display: block;
+    }
+
+    #chart-legend {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--dim);
+      flex-wrap: wrap;
+    }
+
+    .legend-item { display: flex; align-items: center; gap: 4px; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+    #diagnostics {
+      background: #1a2420;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      font-variant-numeric: tabular-nums;
+      font-size: 13px;
+    }
+
+    .diag-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      color: var(--fg);
+    }
+
+    .diag-row + .diag-row { border-top: 1px solid rgba(232, 228, 216, 0.08); }
+    .diag-label { color: var(--dim); }
+
+    #result-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: auto;
+    }
+
+    #result-close, #result-save {
+      flex: 1;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      border: 1px solid var(--fg);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--fg);
+      cursor: pointer;
+      letter-spacing: 0.5px;
+    }
+
+    #result-close {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--bg);
+    }
+
+    #result-close:active, #result-save:active { opacity: 0.8; }
+
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      z-index: 20;
+    }
+
+    #loading.hidden { display: none; }
+
+    #loading-label {
+      font-size: 14px;
+      color: var(--dim);
+      letter-spacing: 1px;
+    }
+
+    #loading-spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--dim);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #error-panel {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      padding: 32px 24px;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 30;
+    }
+
+    #error-panel.visible { display: flex; }
+
+    #error-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--error);
+    }
+
+    #error-message {
+      font-size: 14px;
+      text-align: center;
+      line-height: 1.5;
+      color: var(--fg);
+      max-width: 320px;
+    }
+
+    #debug {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      right: 8px;
+      font-size: 10px;
+      color: rgba(255,255,255,0.5);
+      font-family: 'SF Mono', monospace;
+      pointer-events: none;
+    }
+  </style>
 </head>
 <body>
+  <div id="app">
+    <div id="video-container">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="rec-border"></div>
+      <div id="rec-indicator">
+        <div id="rec-dot"></div>
+        <span>REC</span>
+      </div>
+      <div id="listen-indicator">
+        <div id="listen-dot"></div>
+        <span>say &ldquo;ready&rdquo;</span>
+      </div>
+      <div id="countdown">6</div>
+      <div id="countdown-label">Get into your stance</div>
+      <div id="debug"></div>
+    </div>
 
-<header>
-  <h1>Golf Coach — Tempo</h1>
-  <span class="ver mono">v0.2.0</span>
-</header>
-
-<div class="stage" id="stage">
-  <video id="video" playsinline autoplay muted></video>
-  <canvas id="overlay"></canvas>
-  <div class="badge">
-    <span class="dot idle" id="statusDot"></span>
-    <span id="statusText">idle</span>
+    <div id="controls">
+      <div id="status">Tap Start, or say &ldquo;ready&rdquo;. You have 6 seconds to get into stance.</div>
+      <button id="record-btn" disabled>Start</button>
+      <div id="voice-row">
+        <label for="voice-toggle">Voice trigger (say &ldquo;ready&rdquo;)</label>
+        <div id="voice-toggle" class="on" role="switch" aria-checked="true" tabindex="0"></div>
+      </div>
+    </div>
   </div>
-  <div class="countdown-big" id="countdownBig">3</div>
-</div>
 
-<div class="panel">
-  <h2>Session</h2>
-  <div class="row">
-    <button id="btnSession" class="primary">Start session</button>
-    <button id="btnStop" class="danger" disabled>End swing</button>
-    <button id="btnManualReady" disabled>Tap &ldquo;ready&rdquo;</button>
+  <div id="loading">
+    <div id="loading-spinner"></div>
+    <div id="loading-label">Loading pose detection…</div>
   </div>
-  <div class="row">
-    <label class="toggle">
-      <input type="checkbox" id="toggleVoice" checked />
-      Listen for &ldquo;ready&rdquo;
-    </label>
-    <span class="hint" id="voiceHint">&nbsp;</span>
+
+  <div id="result-panel">
+    <div id="result-header">
+      <div id="result-label">Tempo Ratio</div>
+      <div id="result-value">—</div>
+      <div id="result-verdict"></div>
+    </div>
+
+    <div id="warnings"></div>
+
+    <div id="chart-section">
+      <div id="chart-title">Wrist Height Over Time</div>
+      <canvas id="chart-canvas"></canvas>
+      <div id="chart-legend">
+        <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
+        <div class="legend-item"><div class="legend-dot" style="background: var(--finish)"></div>Finish</div>
+      </div>
+    </div>
+
+    <div id="diagnostics"></div>
+
+    <div id="result-actions">
+      <button id="result-save">Save Raw Data</button>
+      <button id="result-close">Next Swing</button>
+    </div>
   </div>
-  <p class="hint">
-    Stand 2&ndash;2.5&nbsp;m from the phone, face-on. Say <strong>ready</strong> &rarr; wait for the beep &rarr; swing through to a full finish &rarr; tap <em>End swing</em>.
-  </p>
-</div>
 
-<div class="panel">
-  <h2>Last swing</h2>
-  <div class="row">
-    <div class="stat" id="statBack"><span class="label">backswing</span><span class="value mono">&mdash;</span></div>
-    <div class="stat" id="statDown"><span class="label">downswing</span><span class="value mono">&mdash;</span></div>
-    <div class="stat" id="statRatio"><span class="label">ratio</span><span class="value mono">&mdash;</span></div>
-    <div class="stat" id="statFps"><span class="label">fps</span><span class="value mono">&mdash;</span></div>
+  <div id="error-panel">
+    <div id="error-title">Something went wrong</div>
+    <div id="error-message"></div>
   </div>
-  <div class="row" style="margin-top: 12px;">
-    <canvas id="chart"></canvas>
-  </div>
-</div>
 
-<div class="panel">
-  <h2>Log</h2>
-  <div class="log" id="log"></div>
-</div>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 
-<footer>MediaPipe Pose · runs on-device · no video stored</footer>
+  <script>
+    // ============================================================
+    // Golf Coach v0.2.0
+    //
+    // Changes from v0.1.6 (surgical — the analysis pipeline is byte-identical):
+    //   + Voice trigger: say "ready" to start the countdown (replaces tap)
+    //   + Web Speech API, continuous, auto-restart on end (iOS Safari defense)
+    //   + Recognition runs only in 'idle' state — pauses during countdown/recording
+    //   + On-screen "listening" indicator
+    //   + Voice toggle to fall back to tap if mic misbehaves
+    //   + Tap Start still works as before
+    //
+    // Unchanged from v0.1.6:
+    //   - Pinned MediaPipe Pose @0.5.1675469404
+    //   - Camera, pose pump, drawing, audio tones, tempo analysis, chart, result UI
+    // ============================================================
 
-<!-- MediaPipe Pose via CDN (jsdelivr) -->
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    const COUNTDOWN_SECONDS = 6;
+    const MAX_SWING_MS = 4000;
+    const MIN_PEAK_SEPARATION_MS = 300;
+    const PRE_ADDRESS_BUFFER_MS = 300;
+    const POST_FINISH_BUFFER_MS = 400;
 
-<script>
-/* =======================================================================
-   Golf Coach — v0.2.0
-   Voice trigger replaces tap-to-start.
-   Everything else preserved from v0.1.6:
-     - Face-on, front camera
-     - MediaPipe Pose, 33 keypoints
-     - W-shape wrist-height tempo algorithm
-       (Address onset, prominence peaks, 300 ms merge, valley = impact)
-     - Partial swings rejected
-   ======================================================================= */
+    // v0.2 voice-trigger tunables
+    const MIC_RESTART_DELAY_MS = 400;
 
-/* ---------- tunables (copied from v0.1.6) ---------- */
-const WRIST_CONF_GOOD    = 0.7;   // use avg of both wrists above this
-const WRIST_CONF_MIN     = 0.5;   // below this, drop the frame
-const MAX_SWING_MS       = 4000;  // analysis window length from Address
-const PEAK_PROMINENCE    = 0.15;  // 15% of window range
-const PEAK_MERGE_MS      = 300;   // merge peaks within this gap
-const MOTION_ONSET_UP    = 0.008; // normalized Y units per frame, smoothed
-const MOTION_ONSET_FRAMES = 3;    // sustained frames required
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const overlayCtx = overlay.getContext('2d');
+    const recordBtn = document.getElementById('record-btn');
+    const status = document.getElementById('status');
+    const recIndicator = document.getElementById('rec-indicator');
+    const recBorder = document.getElementById('rec-border');
+    const countdownEl = document.getElementById('countdown');
+    const countdownLabel = document.getElementById('countdown-label');
+    const loading = document.getElementById('loading');
+    const loadingLabel = document.getElementById('loading-label');
+    const resultPanel = document.getElementById('result-panel');
+    const resultValue = document.getElementById('result-value');
+    const resultVerdict = document.getElementById('result-verdict');
+    const warningsEl = document.getElementById('warnings');
+    const diagnostics = document.getElementById('diagnostics');
+    const chartCanvas = document.getElementById('chart-canvas');
+    const chartCtx = chartCanvas.getContext('2d');
+    const resultClose = document.getElementById('result-close');
+    const resultSave = document.getElementById('result-save');
+    const errorPanel = document.getElementById('error-panel');
+    const errorMessage = document.getElementById('error-message');
+    const debug = document.getElementById('debug');
+    // v0.2 additions
+    const listenIndicator = document.getElementById('listen-indicator');
+    const voiceToggle = document.getElementById('voice-toggle');
 
-/* ---------- v0.2 voice trigger tunables ---------- */
-const COUNTDOWN_MS        = [600, 600, 600]; // tick, tick, beep
-const MAX_RECORD_MS       = 6000;            // auto-stop safety net
-const MIC_RESTART_DELAY   = 400;             // debounce auto-restart
+    let pose = null;
+    let appState = 'idle';
+    let frames = [];
+    let recordingStartTime = 0;
+    let beepTime = 0;
+    let countdownTimer = null;
+    let rafId = null;
+    let lastAnalysis = null;
+    let audioCtx = null;
 
-/* ---------- dom ---------- */
-const $ = (id) => document.getElementById(id);
-const video = $("video");
-const overlay = $("overlay");
-const octx = overlay.getContext("2d");
-const chart = $("chart");
-const cctx = chart.getContext("2d");
-const statusDot = $("statusDot");
-const statusText = $("statusText");
-const countdownBig = $("countdownBig");
-const btnSession = $("btnSession");
-const btnStop = $("btnStop");
-const btnManualReady = $("btnManualReady");
-const toggleVoice = $("toggleVoice");
-const voiceHint = $("voiceHint");
-const logEl = $("log");
+    // v0.2 voice state
+    let recognition = null;
+    let recognitionRunning = false;
+    let voiceEnabled = true;
+    let voiceSupported = true;
+    let micRestartPending = false;
 
-/* ---------- app state ---------- */
-const state = {
-  sessionActive: false,
-  phase: "idle",    // idle | listening | countdown | recording | analyzing
-  frames: [],       // per-frame {t, wristY, wristConf, pose}
-  recordStartT: 0,
-  pose: null,       // MediaPipe Pose instance
-  audioCtx: null,
-  recognition: null,
-  recognitionRunning: false,
-  micRestartPending: false,
-  cameraReady: false,
-};
-
-/* ---------- logging ---------- */
-function log(msg, level="info") {
-  const t = new Date().toISOString().slice(11, 23);
-  const line = `[${t}] ${msg}`;
-  logEl.textContent = (line + "\n" + logEl.textContent).slice(0, 8000);
-  if (level === "error") console.error(line);
-  else console.log(line);
-}
-
-/* ---------- status chip ---------- */
-function setStatus(phase, text) {
-  state.phase = phase;
-  statusDot.className = "dot " + phase;
-  statusText.textContent = text ?? phase;
-}
-
-/* ===================================================================
-   Camera + Pose
-   =================================================================== */
-
-async function startCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "user",
-        width:  { ideal: 720 },
-        height: { ideal: 960 },
-        frameRate: { ideal: 30 }
-      },
-      audio: false
-    });
-    video.srcObject = stream;
-    await new Promise(r => {
-      if (video.readyState >= 2) return r();
-      video.onloadedmetadata = () => r();
-    });
-    overlay.width = video.videoWidth;
-    overlay.height = video.videoHeight;
-    state.cameraReady = true;
-    log(`camera ready ${video.videoWidth}x${video.videoHeight}`);
-  } catch (err) {
-    log("camera failed: " + err.message, "error");
-    alert("Camera permission is required. Check your browser settings.");
-  }
-}
-
-async function startPose() {
-  // eslint-disable-next-line no-undef
-  const pose = new Pose({
-    locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`
-  });
-  pose.setOptions({
-    modelComplexity: 1,
-    smoothLandmarks: true,
-    enableSegmentation: false,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-  });
-  pose.onResults(onPoseResults);
-  await pose.initialize();
-  state.pose = pose;
-  log("pose model initialized");
-  requestAnimationFrame(poseLoop);
-}
-
-async function poseLoop() {
-  if (state.pose && state.cameraReady && video.readyState >= 2) {
-    try {
-      await state.pose.send({ image: video });
-    } catch (e) { /* swallow occasional send errors */ }
-  }
-  requestAnimationFrame(poseLoop);
-}
-
-function onPoseResults(res) {
-  drawOverlay(res);
-  if (state.phase !== "recording") return;
-
-  const lms = res.poseLandmarks;
-  if (!lms) return;
-
-  // MediaPipe Pose landmark indices: 15 = left wrist, 16 = right wrist
-  const lw = lms[15], rw = lms[16];
-  // Normalized coords: y grows downward. Invert so "up" = higher number for chart clarity.
-  // But tempo algorithm per brief operates on wristY as given (higher y = lower hands).
-  // We'll keep MediaPipe's convention: wristY large = low hands (address), small = high hands (top).
-
-  let wristY = null;
-  let conf = null;
-  if (lw.visibility >= WRIST_CONF_GOOD && rw.visibility >= WRIST_CONF_GOOD) {
-    wristY = (lw.y + rw.y) / 2;
-    conf = Math.min(lw.visibility, rw.visibility);
-  } else {
-    // fall back to the more-visible wrist
-    const best = (lw.visibility >= rw.visibility) ? lw : rw;
-    if (best.visibility >= WRIST_CONF_MIN) {
-      wristY = best.y;
-      conf = best.visibility;
+    function showError(title, message) {
+      errorPanel.querySelector('#error-title').textContent = title;
+      errorMessage.textContent = message;
+      errorPanel.classList.add('visible');
+      loading.classList.add('hidden');
     }
-  }
 
-  if (wristY === null) return; // drop low-confidence frame
-
-  const now = performance.now();
-  state.frames.push({ t: now - state.recordStartT, wristY, conf });
-
-  // safety auto-stop
-  if (now - state.recordStartT > MAX_RECORD_MS) {
-    log("max record time hit, auto-stopping");
-    endSwing();
-  }
-}
-
-function drawOverlay(res) {
-  const w = overlay.width, h = overlay.height;
-  octx.clearRect(0, 0, w, h);
-  if (!res.poseLandmarks) return;
-
-  // mirrored — we flipped video via CSS. Draw mirrored too so markers line up.
-  octx.save();
-  octx.translate(w, 0);
-  octx.scale(-1, 1);
-
-  // draw wrists only (minimal overlay to keep it useful not noisy)
-  const lw = res.poseLandmarks[15];
-  const rw = res.poseLandmarks[16];
-  [lw, rw].forEach(p => {
-    if (!p || p.visibility < WRIST_CONF_MIN) return;
-    octx.beginPath();
-    octx.arc(p.x * w, p.y * h, 8, 0, Math.PI * 2);
-    octx.fillStyle = p.visibility >= WRIST_CONF_GOOD ? "rgba(157,214,154,0.9)" : "rgba(226,178,74,0.85)";
-    octx.fill();
-  });
-  octx.restore();
-}
-
-/* ===================================================================
-   Audio — countdown ticks, beep, feedback chimes (minimal; v0.3 expands)
-   =================================================================== */
-
-function audio() {
-  if (!state.audioCtx) {
-    state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  return state.audioCtx;
-}
-
-function tone(freq, durMs, { type="sine", gain=0.15 } = {}) {
-  const ctx = audio();
-  const osc = ctx.createOscillator();
-  const g = ctx.createGain();
-  osc.type = type;
-  osc.frequency.value = freq;
-  g.gain.value = 0;
-  g.gain.linearRampToValueAtTime(gain, ctx.currentTime + 0.01);
-  g.gain.linearRampToValueAtTime(0, ctx.currentTime + durMs / 1000);
-  osc.connect(g).connect(ctx.destination);
-  osc.start();
-  osc.stop(ctx.currentTime + durMs / 1000 + 0.02);
-}
-
-const tick   = () => tone(660, 80,  { type: "square", gain: 0.08 });
-const beep   = () => tone(880, 220, { type: "sine",   gain: 0.2 });
-
-/* ===================================================================
-   Voice recognition — "ready" trigger
-   =================================================================== */
-
-function setupRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    log("Web Speech API not supported on this browser", "error");
-    voiceHint.textContent = "voice not supported — use tap";
-    toggleVoice.checked = false;
-    toggleVoice.disabled = true;
-    btnManualReady.disabled = false;
-    return;
-  }
-
-  const rec = new SR();
-  rec.lang = "en-US";
-  rec.continuous = true;
-  rec.interimResults = true;
-  rec.maxAlternatives = 3;
-
-  rec.onstart = () => {
-    state.recognitionRunning = true;
-    voiceHint.textContent = "listening for \u201Cready\u201D";
-    log("recognition started");
-  };
-
-  rec.onend = () => {
-    state.recognitionRunning = false;
-    log("recognition ended");
-    // iOS Safari / Chrome can auto-stop after silence. Restart if we still want it.
-    if (state.sessionActive && toggleVoice.checked && state.phase === "listening") {
-      if (!state.micRestartPending) {
-        state.micRestartPending = true;
-        setTimeout(() => {
-          state.micRestartPending = false;
-          if (state.sessionActive && toggleVoice.checked && state.phase === "listening") {
-            try { rec.start(); } catch (e) { log("restart error: " + e.message, "error"); }
-          }
-        }, MIC_RESTART_DELAY);
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+          audio: false
+        });
+        video.srcObject = stream;
+        await new Promise((resolve) => {
+          video.onloadedmetadata = () => { video.play(); resolve(); };
+        });
+        resizeOverlay();
+        window.addEventListener('resize', resizeOverlay);
+      } catch (e) {
+        showError('Camera access denied', 'This app needs camera access. Please allow it and reload.');
+        throw e;
       }
     }
-  };
 
-  rec.onerror = (e) => {
-    log("recognition error: " + e.error, "error");
-    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-      voiceHint.textContent = "mic blocked — use tap";
-      toggleVoice.checked = false;
-      btnManualReady.disabled = false;
+    function resizeOverlay() {
+      overlay.width = video.clientWidth;
+      overlay.height = video.clientHeight;
     }
-    // "no-speech" / "audio-capture" / "aborted" fall through; onend restart handles them
-  };
 
-  rec.onresult = (ev) => {
-    // scan every new alternative for the wake word
-    for (let i = ev.resultIndex; i < ev.results.length; i++) {
-      const r = ev.results[i];
-      for (let a = 0; a < r.length; a++) {
-        const text = r[a].transcript.toLowerCase().trim();
-        if (containsReady(text)) {
-          log(`heard: "${text}" (final=${r.isFinal})`);
-          onReadyTrigger();
-          return;
+    function ensureAudio() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playBeep() {
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, now);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.3, now + 0.02);
+      gain.gain.linearRampToValueAtTime(0, now + 0.25);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    }
+
+    function playTick() {
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, now);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.12, now + 0.01);
+      gain.gain.linearRampToValueAtTime(0, now + 0.08);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    }
+
+    async function setupPose() {
+      pose = new Pose({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+      });
+      pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      pose.onResults(onPoseResults);
+      await pose.initialize?.();
+    }
+
+    function onPoseResults(results) {
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+      if (results.poseLandmarks) {
+        drawSkeleton(results.poseLandmarks);
+        if (appState === 'recording') {
+          frames.push({
+            t: performance.now() - recordingStartTime,
+            landmarks: results.poseLandmarks.map(lm => ({
+              x: lm.x, y: lm.y, z: lm.z, v: lm.visibility
+            }))
+          });
+          debug.textContent = `frames: ${frames.length}`;
         }
       }
     }
-  };
 
-  state.recognition = rec;
-}
-
-function containsReady(text) {
-  // Tolerate common mis-hears: "ready", "reddy", "red E", "already" (trim)
-  // Keep this narrow — we want precision over recall on a noisy range.
-  const t = " " + text.replace(/[^a-z\s]/g, "") + " ";
-  return / ready /.test(t) || / reddy /.test(t) || / redi /.test(t);
-}
-
-function startRecognition() {
-  if (!state.recognition) return;
-  if (state.recognitionRunning) return;
-  try {
-    state.recognition.start();
-  } catch (e) {
-    // "InvalidStateError" if already started — safe to ignore
-    log("start recognition threw: " + e.message);
-  }
-}
-
-function stopRecognition() {
-  if (!state.recognition) return;
-  try { state.recognition.stop(); } catch (_) {}
-}
-
-/* ===================================================================
-   Session flow
-   =================================================================== */
-
-async function startSession() {
-  if (!state.cameraReady) {
-    await startCamera();
-    await startPose();
-  }
-  state.sessionActive = true;
-  btnSession.textContent = "End session";
-  btnSession.classList.remove("primary");
-  btnStop.disabled = true;
-  btnManualReady.disabled = false;
-
-  // Warm up audio context inside a user gesture
-  try { audio().resume(); } catch(_) {}
-
-  armListening();
-}
-
-function endSession() {
-  state.sessionActive = false;
-  stopRecognition();
-  setStatus("idle", "idle");
-  btnSession.textContent = "Start session";
-  btnSession.classList.add("primary");
-  btnStop.disabled = true;
-  btnManualReady.disabled = true;
-  voiceHint.textContent = "";
-  log("session ended");
-}
-
-function armListening() {
-  if (!state.sessionActive) return;
-  setStatus("listening", "say \u201Cready\u201D");
-  state.frames = [];
-  btnStop.disabled = true;
-  btnManualReady.disabled = false;
-  if (toggleVoice.checked) startRecognition();
-  else voiceHint.textContent = "voice off — tap \u201Cready\u201D";
-}
-
-function onReadyTrigger() {
-  if (state.phase !== "listening") return;
-  stopRecognition(); // don't keep listening through the countdown/swing
-  runCountdown().then(startRecording);
-}
-
-async function runCountdown() {
-  setStatus("countdown", "countdown");
-  countdownBig.classList.add("on");
-  const labels = ["3", "2", "1"];
-  for (let i = 0; i < COUNTDOWN_MS.length; i++) {
-    countdownBig.textContent = labels[i];
-    if (i < COUNTDOWN_MS.length - 1) tick();
-    else beep(); // last one is the "go" beep
-    await wait(COUNTDOWN_MS[i]);
-  }
-  countdownBig.classList.remove("on");
-}
-
-function startRecording() {
-  state.frames = [];
-  state.recordStartT = performance.now();
-  setStatus("recording", "recording");
-  btnStop.disabled = false;
-  btnManualReady.disabled = true;
-  log("recording started");
-}
-
-function endSwing() {
-  if (state.phase !== "recording") return;
-  setStatus("analyzing", "analyzing");
-  btnStop.disabled = true;
-  const frames = state.frames.slice();
-  log(`captured ${frames.length} frames`);
-  // analyze on next tick so UI updates
-  setTimeout(() => {
-    const result = analyzeTempo(frames);
-    renderResult(result, frames);
-    // loop back to listening
-    armListening();
-  }, 30);
-}
-
-function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-/* ===================================================================
-   Tempo analysis — W-shape wrist trace
-   (copied faithfully from v0.1.6 per brief)
-   =================================================================== */
-
-function analyzeTempo(frames) {
-  if (frames.length < 15) {
-    return { ok: false, reason: "too few frames", frames };
-  }
-
-  // 1. Find Address = motion onset
-  const addressIdx = findAddressOnset(frames);
-  if (addressIdx === -1) {
-    return { ok: false, reason: "no motion onset detected", frames };
-  }
-
-  // 2. Window = Address .. Address + MAX_SWING_MS
-  const addressT = frames[addressIdx].t;
-  const windowEnd = addressT + MAX_SWING_MS;
-  const window = frames.filter(f => f.t >= addressT && f.t <= windowEnd);
-  if (window.length < 10) {
-    return { ok: false, reason: "window too short", frames };
-  }
-
-  // 3. Find prominent peaks (local MINIMA of wristY = high hands)
-  const ys = window.map(f => f.wristY);
-  const yMin = Math.min(...ys);
-  const yMax = Math.max(...ys);
-  const range = yMax - yMin;
-  if (range < 0.05) {
-    return { ok: false, reason: "not enough vertical hand motion", frames };
-  }
-  const prominence = PEAK_PROMINENCE * range;
-
-  let peaks = findMinimaPeaks(window, prominence);
-
-  // 4. Merge peaks within 300 ms — keep the higher-hands (smaller wristY) one
-  peaks = mergeClosePeaks(peaks, window, PEAK_MERGE_MS);
-
-  if (peaks.length < 2) {
-    return {
-      ok: false,
-      reason: "incomplete swing — swing all the way through to the finish position",
-      frames,
-      addressIdx,
-      peaks
+    const LM = {
+      NOSE: 0,
+      LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
+      LEFT_ELBOW: 13, RIGHT_ELBOW: 14,
+      LEFT_WRIST: 15, RIGHT_WRIST: 16,
+      LEFT_HIP: 23, RIGHT_HIP: 24,
+      LEFT_KNEE: 25, RIGHT_KNEE: 26,
+      LEFT_ANKLE: 27, RIGHT_ANKLE: 28
     };
-  }
 
-  // 5. Top = first peak, Finish = second peak, Impact = deepest valley between them
-  const topPeak    = peaks[0];
-  const finishPeak = peaks[1];
-  const impactPeak = findValleyBetween(window, topPeak.idx, finishPeak.idx);
+    const BONES = [
+      [LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER],
+      [LM.LEFT_SHOULDER, LM.LEFT_ELBOW], [LM.LEFT_ELBOW, LM.LEFT_WRIST],
+      [LM.RIGHT_SHOULDER, LM.RIGHT_ELBOW], [LM.RIGHT_ELBOW, LM.RIGHT_WRIST],
+      [LM.LEFT_SHOULDER, LM.LEFT_HIP], [LM.RIGHT_SHOULDER, LM.RIGHT_HIP],
+      [LM.LEFT_HIP, LM.RIGHT_HIP],
+      [LM.LEFT_HIP, LM.LEFT_KNEE], [LM.LEFT_KNEE, LM.LEFT_ANKLE],
+      [LM.RIGHT_HIP, LM.RIGHT_KNEE], [LM.RIGHT_KNEE, LM.RIGHT_ANKLE]
+    ];
 
-  const topT    = window[topPeak.idx].t;
-  const finishT = window[finishPeak.idx].t;
-  const impactT = window[impactPeak.idx].t;
-
-  // 6. Metrics
-  const backswing_ms = Math.round(topT - addressT);
-  const downswing_ms = Math.round(impactT - topT);
-  if (downswing_ms <= 0 || backswing_ms <= 0) {
-    return { ok: false, reason: "degenerate timing", frames };
-  }
-  const ratio = +(backswing_ms / downswing_ms).toFixed(2);
-  const effFps = frames.length > 1
-    ? +(frames.length / ((frames[frames.length - 1].t - frames[0].t) / 1000)).toFixed(1)
-    : 0;
-
-  return {
-    ok: true,
-    frames,
-    window,
-    addressIdx,
-    topIdx:    topPeak.idx,
-    impactIdx: impactPeak.idx,
-    finishIdx: finishPeak.idx,
-    metrics: {
-      backswing_ms,
-      downswing_ms,
-      ratio,
-      address_y: +frames[addressIdx].wristY.toFixed(3),
-      top_y:     +window[topPeak.idx].wristY.toFixed(3),
-      impact_y:  +window[impactPeak.idx].wristY.toFixed(3),
-      wrist_rise: +(frames[addressIdx].wristY - window[topPeak.idx].wristY).toFixed(3),
-      effective_fps: effFps
+    function drawSkeleton(landmarks) {
+      const w = overlay.width, h = overlay.height;
+      const toX = (x) => (1 - x) * w;
+      const toY = (y) => y * h;
+      overlayCtx.lineWidth = 3;
+      overlayCtx.strokeStyle = 'rgba(155, 197, 61, 0.85)';
+      overlayCtx.fillStyle = 'rgba(232, 228, 216, 0.95)';
+      for (const [a, b] of BONES) {
+        const la = landmarks[a], lb = landmarks[b];
+        if (la.visibility > 0.3 && lb.visibility > 0.3) {
+          overlayCtx.beginPath();
+          overlayCtx.moveTo(toX(la.x), toY(la.y));
+          overlayCtx.lineTo(toX(lb.x), toY(lb.y));
+          overlayCtx.stroke();
+        }
+      }
+      const keyJoints = [LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER, LM.LEFT_ELBOW, LM.RIGHT_ELBOW,
+        LM.LEFT_WRIST, LM.RIGHT_WRIST, LM.LEFT_HIP, LM.RIGHT_HIP, LM.LEFT_KNEE, LM.RIGHT_KNEE];
+      for (const idx of keyJoints) {
+        const lm = landmarks[idx];
+        if (lm.visibility > 0.3) {
+          overlayCtx.beginPath();
+          overlayCtx.arc(toX(lm.x), toY(lm.y), 4, 0, 2 * Math.PI);
+          overlayCtx.fill();
+        }
+      }
     }
-  };
-}
 
-function findAddressOnset(frames) {
-  // Smooth 5-frame window, find sustained upward motion (wristY decreasing)
-  const N = frames.length;
-  for (let i = 5; i < N - MOTION_ONSET_FRAMES; i++) {
-    let sustained = true;
-    for (let k = 0; k < MOTION_ONSET_FRAMES; k++) {
-      const dy = frames[i + k - 1].wristY - frames[i + k].wristY;
-      if (dy < MOTION_ONSET_UP) { sustained = false; break; }
+    async function pump() {
+      if (video.readyState >= 2) await pose.send({ image: video });
+      rafId = requestAnimationFrame(pump);
     }
-    if (sustained) {
-      // backtrack slightly to pick the last stable frame before the rise
-      return Math.max(0, i - 1);
+
+    // ============================================================
+    // v0.2 Voice trigger — Web Speech API
+    // ============================================================
+
+    function setupRecognition() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) {
+        voiceSupported = false;
+        voiceEnabled = false;
+        setVoiceToggleUI(false, true);
+        return;
+      }
+
+      recognition = new SR();
+      recognition.lang = 'en-US';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 3;
+
+      recognition.onstart = () => {
+        recognitionRunning = true;
+        if (appState === 'idle' && voiceEnabled) {
+          listenIndicator.classList.add('active');
+        }
+      };
+
+      recognition.onend = () => {
+        recognitionRunning = false;
+        listenIndicator.classList.remove('active');
+        // Auto-restart if we still want to be listening (iOS Safari silently stops on silence)
+        if (appState === 'idle' && voiceEnabled && !micRestartPending) {
+          micRestartPending = true;
+          setTimeout(() => {
+            micRestartPending = false;
+            if (appState === 'idle' && voiceEnabled) startRecognition();
+          }, MIC_RESTART_DELAY_MS);
+        }
+      };
+
+      recognition.onerror = (e) => {
+        // "no-speech", "aborted", "audio-capture" can fire during normal use — onend handles restart.
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          voiceEnabled = false;
+          voiceSupported = false;
+          setVoiceToggleUI(false, true);
+          listenIndicator.classList.remove('active');
+          status.textContent = 'Mic blocked — using tap. Tap Start.';
+        }
+      };
+
+      recognition.onresult = (ev) => {
+        if (appState !== 'idle' || !voiceEnabled) return;
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const r = ev.results[i];
+          for (let a = 0; a < r.length; a++) {
+            const text = r[a].transcript.toLowerCase().trim();
+            if (matchesReady(text)) {
+              onVoiceReady();
+              return;
+            }
+          }
+        }
+      };
     }
-  }
-  return -1;
-}
 
-function findMinimaPeaks(window, prominence) {
-  // Local minima of wristY with prominence check against the larger of:
-  // - left-side max since previous minimum
-  // - right-side max until next minimum
-  const ys = window.map(f => f.wristY);
-  const n = ys.length;
-  const candidates = [];
-  for (let i = 2; i < n - 2; i++) {
-    if (ys[i] < ys[i-1] && ys[i] < ys[i-2] && ys[i] < ys[i+1] && ys[i] < ys[i+2]) {
-      candidates.push(i);
+    function matchesReady(text) {
+      // Match "ready" as a whole word. Tolerate a couple of common mishears.
+      // Narrow by design — we want precision over recall on a noisy range.
+      const padded = ' ' + text.replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ') + ' ';
+      return / ready /.test(padded) || / reddy /.test(padded) || / redi /.test(padded);
     }
-  }
-  // prominence filter
-  const peaks = [];
-  for (const idx of candidates) {
-    const leftMax  = Math.max(...ys.slice(0, idx));
-    const rightMax = Math.max(...ys.slice(idx + 1));
-    const refMax   = Math.min(leftMax, rightMax);
-    if ((refMax - ys[idx]) >= prominence) {
-      peaks.push({ idx, y: ys[idx], t: window[idx].t });
+
+    function startRecognition() {
+      if (!recognition || recognitionRunning || !voiceEnabled) return;
+      try { recognition.start(); }
+      catch (_) { /* "InvalidStateError" if already started — ignore */ }
     }
-  }
-  // order by time
-  peaks.sort((a, b) => a.t - b.t);
-  return peaks;
-}
 
-function mergeClosePeaks(peaks, window, gapMs) {
-  if (peaks.length < 2) return peaks;
-  const merged = [peaks[0]];
-  for (let i = 1; i < peaks.length; i++) {
-    const prev = merged[merged.length - 1];
-    const cur  = peaks[i];
-    if ((cur.t - prev.t) <= gapMs) {
-      // keep the one with smaller wristY (higher hands)
-      if (cur.y < prev.y) merged[merged.length - 1] = cur;
-    } else {
-      merged.push(cur);
+    function stopRecognition() {
+      if (!recognition || !recognitionRunning) return;
+      try { recognition.stop(); } catch (_) {}
     }
-  }
-  return merged;
-}
 
-function findValleyBetween(window, aIdx, bIdx) {
-  let best = aIdx;
-  let bestY = -Infinity;
-  for (let i = aIdx + 1; i < bIdx; i++) {
-    if (window[i].wristY > bestY) {
-      bestY = window[i].wristY;
-      best = i;
+    function onVoiceReady() {
+      stopRecognition();
+      listenIndicator.classList.remove('active');
+      startCountdown();
     }
-  }
-  return { idx: best, y: bestY, t: window[best].t };
-}
 
-/* ===================================================================
-   Rendering — stats + trace chart
-   =================================================================== */
+    function setVoiceToggleUI(on, disabled) {
+      voiceToggle.classList.toggle('on', on);
+      voiceToggle.setAttribute('aria-checked', on ? 'true' : 'false');
+      voiceToggle.classList.toggle('disabled', !!disabled);
+    }
 
-function renderResult(res, frames) {
-  if (!res.ok) {
-    log(`swing not analyzed: ${res.reason}`);
-    setStat("statBack", "—", "");
-    setStat("statDown", "—", "");
-    setStat("statRatio", res.reason, "fail");
-    setStat("statFps",
-      frames.length
-        ? ((frames.length / ((frames[frames.length - 1].t - frames[0].t) / 1000)).toFixed(1))
-        : "—",
-      "");
-    drawChart(frames, res);
-    return;
-  }
-  const m = res.metrics;
-  const inRange = m.ratio >= 2.5 && m.ratio <= 3.5;
-  setStat("statBack",  m.backswing_ms + " ms", "");
-  setStat("statDown",  m.downswing_ms + " ms", "");
-  setStat("statRatio", m.ratio.toFixed(2) + " : 1", inRange ? "pass" : "fail");
-  setStat("statFps",   m.effective_fps.toFixed(1), "");
-  drawChart(frames, res);
+    function enableVoice() {
+      if (!voiceSupported) return;
+      voiceEnabled = true;
+      setVoiceToggleUI(true, false);
+      if (appState === 'idle') startRecognition();
+    }
 
-  const verdict = inRange ? "PASS" : "OUT OF RANGE";
-  log(`swing: back=${m.backswing_ms}ms down=${m.downswing_ms}ms ratio=${m.ratio} [${verdict}]`);
-}
+    function disableVoice() {
+      voiceEnabled = false;
+      setVoiceToggleUI(false, false);
+      stopRecognition();
+      listenIndicator.classList.remove('active');
+    }
 
-function setStat(id, value, cls) {
-  const el = document.getElementById(id);
-  el.className = "stat" + (cls ? " " + cls : "");
-  el.querySelector(".value").textContent = value;
-}
+    // ============================================================
+    // Countdown / recording (from v0.1.6, with voice-pause hooks)
+    // ============================================================
 
-function drawChart(frames, res) {
-  const W = chart.clientWidth;
-  const H = chart.clientHeight;
-  if (chart.width !== W || chart.height !== H) {
-    chart.width = W; chart.height = H;
-  }
-  cctx.clearRect(0, 0, W, H);
-  if (!frames || frames.length < 2) return;
+    function startCountdown() {
+      ensureAudio();
+      stopRecognition(); // v0.2: don't listen during countdown
+      listenIndicator.classList.remove('active');
+      appState = 'counting';
+      let remaining = COUNTDOWN_SECONDS;
+      recordBtn.textContent = `${remaining}…`;
+      recordBtn.classList.add('counting');
+      recordBtn.disabled = true;
+      countdownEl.textContent = remaining;
+      countdownEl.classList.add('active');
+      countdownLabel.style.display = 'block';
+      recBorder.classList.add('countdown');
+      status.textContent = 'Get into your stance. Swing when the beep plays.';
+      playTick();
+      countdownTimer = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+          recordBtn.textContent = `${remaining}…`;
+          countdownEl.textContent = remaining;
+          playTick();
+        } else {
+          clearInterval(countdownTimer);
+          countdownTimer = null;
+          countdownEl.classList.remove('active');
+          countdownLabel.style.display = 'none';
+          recBorder.classList.remove('countdown');
+          beginRecording();
+        }
+      }, 1000);
+    }
 
-  const tMin = frames[0].t;
-  const tMax = frames[frames.length - 1].t;
-  const ys = frames.map(f => f.wristY);
-  const yMin = Math.min(...ys);
-  const yMax = Math.max(...ys);
-  const pad = 10;
+    function beginRecording() {
+      playBeep();
+      frames = [];
+      recordingStartTime = performance.now();
+      beepTime = 0;
+      appState = 'recording';
+      recordBtn.textContent = 'Stop';
+      recordBtn.classList.remove('counting');
+      recordBtn.classList.add('recording');
+      recordBtn.disabled = false;
+      recIndicator.classList.add('active');
+      recBorder.classList.add('active');
+      status.textContent = 'Recording… swing, then tap Stop.';
+    }
 
-  const xOf = t => pad + (t - tMin) / (tMax - tMin || 1) * (W - pad * 2);
-  // invert Y so "hands high" renders up on screen (smaller wristY is smaller screen y)
-  const yOf = y => pad + (y - yMin) / (yMax - yMin || 1) * (H - pad * 2);
+    function stopRecording() {
+      appState = 'idle';
+      recordBtn.textContent = 'Start';
+      recordBtn.classList.remove('recording');
+      recIndicator.classList.remove('active');
+      recBorder.classList.remove('active');
+      status.textContent = 'Analyzing…';
+      debug.textContent = '';
+      setTimeout(analyze, 50);
+    }
 
-  // grid baseline
-  cctx.strokeStyle = "#1f2a25";
-  cctx.lineWidth = 1;
-  cctx.beginPath();
-  cctx.moveTo(pad, H / 2); cctx.lineTo(W - pad, H / 2);
-  cctx.stroke();
+    // --- Peak finder (local minima of wristY = hands high) -------------------
+    function findPeaks(y, minProminence) {
+      const peaks = [];
+      const n = y.length;
+      for (let i = 1; i < n - 1; i++) {
+        if (y[i] < y[i-1] && y[i] < y[i+1]) peaks.push(i);
+      }
+      const prominent = [];
+      for (const p of peaks) {
+        let leftMax = y[p];
+        for (let i = p - 1; i >= 0; i--) {
+          if (y[i] < y[p]) break;
+          if (y[i] > leftMax) leftMax = y[i];
+        }
+        let rightMax = y[p];
+        for (let i = p + 1; i < n; i++) {
+          if (y[i] < y[p]) break;
+          if (y[i] > rightMax) rightMax = y[i];
+        }
+        const prom = Math.min(leftMax, rightMax) - y[p];
+        if (prom >= minProminence) prominent.push({ idx: p, value: y[p], prominence: prom });
+      }
+      return prominent;
+    }
 
-  // trace
-  cctx.strokeStyle = "#9dd69a";
-  cctx.lineWidth = 2;
-  cctx.beginPath();
-  frames.forEach((f, i) => {
-    const x = xOf(f.t), y = yOf(f.wristY);
-    if (i === 0) cctx.moveTo(x, y); else cctx.lineTo(x, y);
-  });
-  cctx.stroke();
+    function smooth(arr, window) {
+      const out = [];
+      const half = Math.floor(window / 2);
+      for (let i = 0; i < arr.length; i++) {
+        let s = 0, c = 0;
+        for (let j = Math.max(0, i - half); j <= Math.min(arr.length - 1, i + half); j++) {
+          s += arr[j]; c++;
+        }
+        out.push(s / c);
+      }
+      return out;
+    }
 
-  // annotate events if analysis was ok
-  if (res && res.ok) {
-    const mark = (idx, label, color) => {
-      const f = (idx < res.frames.length) ? res.frames[idx] : null;
-      if (!f) return;
-      const x = xOf(f.t), y = yOf(f.wristY);
-      cctx.fillStyle = color;
-      cctx.beginPath(); cctx.arc(x, y, 5, 0, Math.PI * 2); cctx.fill();
-      cctx.fillStyle = "#e8efe9";
-      cctx.font = "11px JetBrains Mono, monospace";
-      cctx.fillText(label, x + 6, y - 6);
-    };
-    // res.topIdx / impactIdx / finishIdx reference res.window frames, not the full frames[]
-    const windowStart = res.addressIdx;
-    mark(res.addressIdx,                 "A", "#e2b24a");
-    mark(windowStart + res.topIdx,       "T", "#9dd69a");
-    mark(windowStart + res.impactIdx,    "I", "#d87a7a");
-    mark(windowStart + res.finishIdx,    "F", "#9dd69a");
-  }
-}
+    // --- Main analysis -------------------------------------------------------
+    function analyze() {
+      if (frames.length < 15) {
+        showResult({
+          value: '—', verdict: 'Too short', verdictClass: 'error',
+          wristY: [],
+          addressIdx: null, topIdx: null, impactIdx: null, finishIdx: null,
+          diag: [['Frames captured', frames.length]],
+          warnings: []
+        });
+        return;
+      }
 
-/* ===================================================================
-   Wiring
-   =================================================================== */
+      const HIGH_CONF = 0.7;
+      const LOW_CONF = 0.5;
+      const rawY = frames.map(f => {
+        const lw = f.landmarks[LM.LEFT_WRIST];
+        const rw = f.landmarks[LM.RIGHT_WRIST];
+        const lOk = lw.v >= HIGH_CONF;
+        const rOk = rw.v >= HIGH_CONF;
+        if (lOk && rOk) return (lw.y + rw.y) / 2;
+        if (lOk) return lw.y;
+        if (rOk) return rw.y;
+        if (lw.v >= LOW_CONF && lw.v >= rw.v) return lw.y;
+        if (rw.v >= LOW_CONF && rw.v > lw.v) return rw.y;
+        return null;
+      });
+      let lastY = null;
+      for (let i = 0; i < rawY.length; i++) {
+        if (rawY[i] == null) rawY[i] = lastY;
+        else lastY = rawY[i];
+      }
+      let firstY = rawY.find(y => y != null);
+      if (firstY == null) {
+        showResult({
+          value: '—', verdict: 'No pose detected', verdictClass: 'error',
+          wristY: [], addressIdx: null, topIdx: null, impactIdx: null, finishIdx: null,
+          diag: [['Frames captured', frames.length], ['Pose detected in', '0 frames']],
+          warnings: []
+        });
+        return;
+      }
+      for (let i = 0; i < rawY.length; i++) {
+        if (rawY[i] == null) rawY[i] = firstY;
+      }
 
-btnSession.addEventListener("click", () => {
-  if (state.sessionActive) endSession();
-  else startSession();
-});
+      const smoothed = smooth(rawY, 5);
 
-btnStop.addEventListener("click", endSwing);
+      const MOTION_CONFIRM = 5;
+      const MIN_MOTION_PER_FRAME = 0.005;
+      let addressIdx = 0;
+      for (let i = 0; i < smoothed.length - MOTION_CONFIRM; i++) {
+        const futureDrop = smoothed[i] - smoothed[i + MOTION_CONFIRM];
+        if (futureDrop < MIN_MOTION_PER_FRAME * MOTION_CONFIRM) {
+          addressIdx = i;
+        } else {
+          break;
+        }
+      }
 
-btnManualReady.addEventListener("click", () => {
-  if (state.phase === "listening") onReadyTrigger();
-});
+      const tAddress = frames[addressIdx].t;
+      const winEndT = tAddress + MAX_SWING_MS;
+      let winEndIdx = frames.length - 1;
+      for (let i = 0; i < frames.length; i++) {
+        if (frames[i].t > winEndT) { winEndIdx = i - 1; break; }
+      }
 
-toggleVoice.addEventListener("change", () => {
-  if (!state.sessionActive) return;
-  if (toggleVoice.checked && state.phase === "listening") {
-    startRecognition();
-    voiceHint.textContent = "listening for \u201Cready\u201D";
-  } else {
-    stopRecognition();
-    voiceHint.textContent = "voice off — tap \u201Cready\u201D";
-  }
-});
+      if (winEndIdx <= addressIdx + 5) {
+        showResult({
+          value: '—', verdict: 'Recording too short', verdictClass: 'error',
+          wristY: smoothed,
+          addressIdx, topIdx: null, impactIdx: null, finishIdx: null,
+          diag: [
+            ['Frames captured', frames.length],
+            ['Address frame', addressIdx],
+            ['Window size', `${winEndIdx - addressIdx} frames`]
+          ],
+          warnings: ['Recording was too short — no swing was captured before it ended.']
+        });
+        return;
+      }
 
-window.addEventListener("resize", () => drawChart([]));
+      const windowSlice = smoothed.slice(addressIdx, winEndIdx + 1);
+      const windowRange = Math.max(...windowSlice) - Math.min(...windowSlice);
+      const minProminence = Math.max(0.04, windowRange * 0.15);
+      const rawPeaks = findPeaks(windowSlice, minProminence)
+        .map(p => ({ idx: p.idx + addressIdx, value: p.value, prominence: p.prominence }));
 
-// init
-setupRecognition();
-log("v0.2.0 loaded. tap Start session.");
-</script>
+      const mergedPeaks = [];
+      for (const p of rawPeaks) {
+        const last = mergedPeaks[mergedPeaks.length - 1];
+        if (last && frames[p.idx].t - frames[last.idx].t < MIN_PEAK_SEPARATION_MS) {
+          if (p.value < last.value) mergedPeaks[mergedPeaks.length - 1] = p;
+        } else {
+          mergedPeaks.push(p);
+        }
+      }
+
+      const warnings = [];
+
+      if (mergedPeaks.length < 2) {
+        showResult({
+          value: '—', verdict: 'Incomplete swing', verdictClass: 'error',
+          wristY: smoothed,
+          addressIdx, topIdx: mergedPeaks[0]?.idx ?? null,
+          impactIdx: null, finishIdx: null,
+          diag: [
+            ['Frames captured', frames.length],
+            ['Prominent peaks', rawPeaks.length],
+            ['Peaks after merging close ones', mergedPeaks.length]
+          ],
+          warnings: ['Not a full swing — swing all the way through to the finish position.']
+        });
+        return;
+      }
+
+      if (mergedPeaks.length > 2) {
+        warnings.push(`Detected ${mergedPeaks.length} distinct peaks — used the first two. If you made extra motions, try one clean swing.`);
+      }
+
+      const topIdx = mergedPeaks[0].idx;
+      const finishIdx = mergedPeaks[1].idx;
+
+      let impactIdx = topIdx + 1;
+      for (let i = topIdx + 1; i < finishIdx; i++) {
+        if (smoothed[i] > smoothed[impactIdx]) impactIdx = i;
+      }
+
+      const chartStartT = tAddress - PRE_ADDRESS_BUFFER_MS;
+      const chartEndT = frames[finishIdx].t + POST_FINISH_BUFFER_MS;
+      let clipStart = 0, clipEnd = frames.length - 1;
+      for (let i = 0; i < frames.length; i++) {
+        if (frames[i].t <= chartStartT) clipStart = i;
+      }
+      for (let i = frames.length - 1; i >= 0; i--) {
+        if (frames[i].t >= chartEndT) clipEnd = i;
+      }
+      if (clipEnd <= clipStart) { clipStart = 0; clipEnd = frames.length - 1; }
+
+      const clippedY = smoothed.slice(clipStart, clipEnd + 1);
+      const clippedFrames = frames.slice(clipStart, clipEnd + 1);
+
+      const cAddress = addressIdx - clipStart;
+      const cTop = topIdx - clipStart;
+      const cImpact = impactIdx - clipStart;
+      const cFinish = finishIdx - clipStart;
+
+      const tTop = frames[topIdx].t;
+      const tImpact = frames[impactIdx].t;
+      const tFinish = frames[finishIdx].t;
+      const backswingMs = tTop - tAddress;
+      const downswingMs = tImpact - tTop;
+      const totalMs = frames[frames.length - 1].t;
+      const fps = frames.length / (totalMs / 1000);
+      const beepToAddressMs = tAddress - beepTime;
+      const clippedDurationMs = clippedFrames[clippedFrames.length - 1].t - clippedFrames[0].t;
+
+      const diag = [
+        ['Frames captured', frames.length],
+        ['Recording duration', `${(totalMs/1000).toFixed(2)} s`],
+        ['Effective FPS', fps.toFixed(1)],
+        ['Analyzed window', `${(clippedDurationMs/1000).toFixed(2)} s`],
+        ['Beep → motion onset', `${beepToAddressMs.toFixed(0)} ms`],
+        ['Address', `frame ${addressIdx} (${tAddress.toFixed(0)} ms)`],
+        ['Top', `frame ${topIdx} (${tTop.toFixed(0)} ms)`],
+        ['Impact', `frame ${impactIdx} (${tImpact.toFixed(0)} ms)`],
+        ['Finish', `frame ${finishIdx} (${tFinish.toFixed(0)} ms)`],
+        ['Backswing', `${backswingMs.toFixed(0)} ms`],
+        ['Downswing', `${downswingMs.toFixed(0)} ms`],
+        ['Raw peaks detected', rawPeaks.length],
+        ['Peaks after merging', mergedPeaks.length],
+        ['Wrist rise', (smoothed[addressIdx] - smoothed[topIdx]).toFixed(3)]
+      ];
+
+      let ratioValue = '—';
+      let verdict = '';
+      let verdictClass = '';
+
+      if (backswingMs <= 0 || downswingMs <= 0) {
+        verdict = 'Detection failed';
+        verdictClass = 'error';
+      } else if (smoothed[addressIdx] - smoothed[topIdx] < 0.08) {
+        verdict = 'No swing detected';
+        verdictClass = 'error';
+      } else {
+        const ratio = backswingMs / downswingMs;
+        ratioValue = `${ratio.toFixed(1)}:1`;
+        if (ratio < 2.0) { verdict = 'Backswing too fast'; verdictClass = 'off'; }
+        else if (ratio > 4.0) { verdict = 'Downswing too slow'; verdictClass = 'off'; }
+        else if (ratio < 2.5 || ratio > 3.5) { verdict = 'A little off 3:1'; verdictClass = 'off'; }
+        else { verdict = 'In range'; verdictClass = 'good'; }
+      }
+
+      showResult({
+        value: ratioValue, verdict, verdictClass,
+        wristY: clippedY,
+        addressIdx: cAddress, topIdx: cTop, impactIdx: cImpact, finishIdx: cFinish,
+        diag, warnings
+      });
+    }
+
+    // --- Chart ---------------------------------------------------------------
+    function drawChart(wristY, addressIdx, topIdx, impactIdx, finishIdx) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = chartCanvas.getBoundingClientRect();
+      chartCanvas.width = rect.width * dpr;
+      chartCanvas.height = rect.height * dpr;
+      chartCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      chartCtx.clearRect(0, 0, rect.width, rect.height);
+
+      const w = rect.width, h = rect.height;
+      const padX = 8, padY = 16;
+      const plotW = w - 2 * padX, plotH = h - 2 * padY;
+
+      if (wristY.length < 2) {
+        chartCtx.fillStyle = 'rgba(232, 228, 216, 0.4)';
+        chartCtx.font = '12px -apple-system, sans-serif';
+        chartCtx.textAlign = 'center';
+        chartCtx.fillText('Not enough data', w / 2, h / 2);
+        return;
+      }
+
+      const minY = Math.min(...wristY);
+      const maxY = Math.max(...wristY);
+      const range = Math.max(0.05, maxY - minY);
+      const toPx = (idx) => padX + (idx / (wristY.length - 1)) * plotW;
+      const toPy = (y) => padY + ((y - minY) / range) * plotH;
+
+      if (addressIdx != null && addressIdx >= 0 && addressIdx < wristY.length) {
+        chartCtx.strokeStyle = 'rgba(232, 228, 216, 0.08)';
+        chartCtx.lineWidth = 1;
+        chartCtx.beginPath();
+        chartCtx.moveTo(padX, toPy(wristY[addressIdx]));
+        chartCtx.lineTo(padX + plotW, toPy(wristY[addressIdx]));
+        chartCtx.stroke();
+      }
+
+      chartCtx.strokeStyle = 'rgba(155, 197, 61, 0.9)';
+      chartCtx.lineWidth = 2;
+      chartCtx.beginPath();
+      for (let i = 0; i < wristY.length; i++) {
+        const px = toPx(i), py = toPy(wristY[i]);
+        if (i === 0) chartCtx.moveTo(px, py);
+        else chartCtx.lineTo(px, py);
+      }
+      chartCtx.stroke();
+
+      const events = [
+        { idx: addressIdx, color: '#5dade2', label: 'A' },
+        { idx: topIdx, color: '#af7ac5', label: 'T' },
+        { idx: impactIdx, color: '#f39c12', label: 'I' },
+        { idx: finishIdx, color: '#ec87c0', label: 'F' }
+      ];
+
+      for (const ev of events) {
+        if (ev.idx == null || ev.idx < 0 || ev.idx >= wristY.length) continue;
+        const px = toPx(ev.idx);
+        const py = toPy(wristY[ev.idx]);
+        chartCtx.strokeStyle = ev.color + '66';
+        chartCtx.lineWidth = 1;
+        chartCtx.setLineDash([3, 3]);
+        chartCtx.beginPath();
+        chartCtx.moveTo(px, padY);
+        chartCtx.lineTo(px, padY + plotH);
+        chartCtx.stroke();
+        chartCtx.setLineDash([]);
+        chartCtx.fillStyle = ev.color;
+        chartCtx.beginPath();
+        chartCtx.arc(px, py, 5, 0, 2 * Math.PI);
+        chartCtx.fill();
+        chartCtx.fillStyle = ev.color;
+        chartCtx.font = 'bold 10px -apple-system, sans-serif';
+        chartCtx.textAlign = 'center';
+        chartCtx.fillText(ev.label, px, padY - 4);
+      }
+    }
+
+    function showResult({ value, verdict, verdictClass, wristY, addressIdx, topIdx, impactIdx, finishIdx, diag, warnings }) {
+      resultValue.textContent = value;
+      resultVerdict.textContent = verdict;
+      resultVerdict.className = '';
+      if (verdictClass) resultVerdict.classList.add(verdictClass);
+
+      if (warnings && warnings.length > 0) {
+        warningsEl.innerHTML = warnings.map(w => `<div>⚠ ${w}</div>`).join('');
+        warningsEl.classList.add('visible');
+      } else {
+        warningsEl.classList.remove('visible');
+      }
+
+      diagnostics.innerHTML = '';
+      for (const [label, val] of diag) {
+        const row = document.createElement('div');
+        row.className = 'diag-row';
+        row.innerHTML = `<span class="diag-label">${label}</span><span>${val}</span>`;
+        diagnostics.appendChild(row);
+      }
+      resultPanel.classList.add('visible');
+      status.textContent = voiceEnabled ? 'Tap Start, or say “ready”, for next swing.' : 'Tap Start for next swing.';
+      requestAnimationFrame(() => {
+        drawChart(wristY, addressIdx, topIdx, impactIdx, finishIdx);
+      });
+
+      lastAnalysis = {
+        version: '0.2.0',
+        timestamp: new Date().toISOString(),
+        value, verdict,
+        addressIdx, topIdx, impactIdx, finishIdx,
+        wristY,
+        frames: frames.map(f => ({
+          t: f.t,
+          leftWrist: f.landmarks[LM.LEFT_WRIST],
+          rightWrist: f.landmarks[LM.RIGHT_WRIST],
+          leftHip: f.landmarks[LM.LEFT_HIP],
+          rightHip: f.landmarks[LM.RIGHT_HIP],
+          leftShoulder: f.landmarks[LM.LEFT_SHOULDER],
+          rightShoulder: f.landmarks[LM.RIGHT_SHOULDER],
+          nose: f.landmarks[LM.NOSE]
+        }))
+      };
+    }
+
+    function saveRawData() {
+      if (!lastAnalysis) return;
+      const json = JSON.stringify(lastAnalysis, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `swing-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    recordBtn.addEventListener('click', () => {
+      ensureAudio();
+      if (appState === 'idle') {
+        startCountdown();
+      } else if (appState === 'recording') {
+        stopRecording();
+      }
+    });
+
+    resultClose.addEventListener('click', () => {
+      resultPanel.classList.remove('visible');
+      if (appState === 'idle' && voiceEnabled) startRecognition();
+    });
+
+    resultSave.addEventListener('click', saveRawData);
+
+    voiceToggle.addEventListener('click', () => {
+      if (!voiceSupported) return;
+      if (voiceEnabled) disableVoice();
+      else enableVoice();
+    });
+    voiceToggle.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); voiceToggle.click(); }
+    });
+
+    (async function boot() {
+      try {
+        loadingLabel.textContent = 'Requesting camera…';
+        await startCamera();
+        loadingLabel.textContent = 'Loading pose detection…';
+        await setupPose();
+        pump();
+        setupRecognition();
+        loading.classList.add('hidden');
+        recordBtn.disabled = false;
+        if (voiceSupported) {
+          status.textContent = 'Tap Start or say “ready”. You have 6 seconds to get into stance.';
+          startRecognition();
+        } else {
+          setVoiceToggleUI(false, true);
+          status.textContent = 'Voice not supported. Tap Start. You have 6 seconds to get into stance.';
+        }
+      } catch (e) {
+        console.error(e);
+        if (!errorPanel.classList.contains('visible')) {
+          showError('Startup failed', e.message || 'Could not start the app.');
+        }
+      }
+    })();
+  </script>
 </body>
 </html>
