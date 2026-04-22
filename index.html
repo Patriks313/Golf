@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.2.2</title>
+  <title>Golf Coach — v0.2.3</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -544,7 +544,15 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.2.2
+    // Golf Coach v0.2.3
+    //
+    // Changes from v0.2.2:
+    //   + Audio confirmation when a shape word is recognized — short chime
+    //     so the golfer doesn't have to look at the phone to know the system
+    //     heard them. Generic tone regardless of which shape (the word is
+    //     written to the JSON anyway if the user wants to verify later).
+    //   + Status bar briefly shows "heard: pull" alongside the chime, for the
+    //     rare case the golfer does glance at the screen.
     //
     // Changes from v0.2.1:
     //   + Peak detector fix: accepts flat plateaus as valid minima (Finish
@@ -705,6 +713,36 @@
       gain.connect(audioCtx.destination);
       osc.start(now);
       osc.stop(now + 0.1);
+    }
+
+    // v0.2.3: short, neutral confirmation chime played when a shape word is
+    // recognized. Two rising notes (~150ms total) — clearly distinct from:
+    //   - playTick() 440 Hz single beep of countdown
+    //   - playBeep() 880 Hz single swing-start beep
+    // Data-neutral, per the "data over judgment" principle in the brief.
+    function playShapeChime() {
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      // Note 1 at 660 Hz
+      const o1 = audioCtx.createOscillator();
+      const g1 = audioCtx.createGain();
+      o1.type = 'sine';
+      o1.frequency.setValueAtTime(660, now);
+      g1.gain.setValueAtTime(0, now);
+      g1.gain.linearRampToValueAtTime(0.14, now + 0.01);
+      g1.gain.linearRampToValueAtTime(0, now + 0.07);
+      o1.connect(g1); g1.connect(audioCtx.destination);
+      o1.start(now); o1.stop(now + 0.09);
+      // Note 2 at 990 Hz (perfect fifth above), slight overlap
+      const o2 = audioCtx.createOscillator();
+      const g2 = audioCtx.createGain();
+      o2.type = 'sine';
+      o2.frequency.setValueAtTime(990, now + 0.06);
+      g2.gain.setValueAtTime(0, now + 0.06);
+      g2.gain.linearRampToValueAtTime(0.14, now + 0.07);
+      g2.gain.linearRampToValueAtTime(0, now + 0.14);
+      o2.connect(g2); g2.connect(audioCtx.destination);
+      o2.start(now + 0.06); o2.stop(now + 0.16);
     }
 
     async function setupPose() {
@@ -902,6 +940,11 @@
       // Fold into lastAnalysis if it exists, so "Save Raw Data" picks it up.
       if (lastAnalysis) lastAnalysis.shape = word;
       showShapeHeardPill(word);
+      // v0.2.3: audio confirmation — the golfer can't see the screen from
+      // 2m away in stance. Chime says "got it, logged." Also update the
+      // status bar in case they do glance at the phone.
+      playShapeChime();
+      flashStatusShapeHeard(word);
     }
 
     function showShapeHeardPill(word) {
@@ -910,6 +953,22 @@
       if (shapeHeardTimer) clearTimeout(shapeHeardTimer);
       shapeHeardTimer = setTimeout(() => {
         shapeHeardEl.classList.remove('visible');
+      }, SHAPE_HEARD_FLASH_MS);
+    }
+
+    // v0.2.3: briefly replace status text with "heard: <word>" then restore
+    // the waiting-state hint so the next swing prompt is clear again.
+    let statusRestoreTimer = null;
+    function flashStatusShapeHeard(word) {
+      status.textContent = 'heard: ' + word + '  —  say "ready" for next swing';
+      if (statusRestoreTimer) clearTimeout(statusRestoreTimer);
+      statusRestoreTimer = setTimeout(() => {
+        statusRestoreTimer = null;
+        if (appState === 'waiting') {
+          status.textContent = shapeEnabled
+            ? 'Say the shape (pull, straight, …) or “ready” for next swing.'
+            : 'Say “ready” for next swing, or tap Next Swing.';
+        }
       }, SHAPE_HEARD_FLASH_MS);
     }
 
