@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.2.3</title>
+  <title>Golf Coach — v0.2.4</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -369,6 +369,62 @@
     .diag-row + .diag-row { border-top: 1px solid rgba(232, 228, 216, 0.08); }
     .diag-label { color: var(--dim); }
 
+    /* v0.2.4 */
+    #last-heard-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 10px 14px;
+      background: #1a2420;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+    #last-heard-row .lh-label {
+      font-size: 11px;
+      color: var(--dim);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+    #last-heard-row .lh-value {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+    }
+    #last-heard-row .lh-value.empty { color: var(--dim); font-weight: 400; font-size: 16px; }
+
+    #transcript-debug {
+      padding: 10px 14px;
+      background: #1a2420;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-family: 'SF Mono', ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--fg);
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    #transcript-debug .td-label {
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    #transcript-debug .td-list .td-entry {
+      padding: 2px 0;
+      color: rgba(232, 228, 216, 0.75);
+      line-height: 1.35;
+    }
+    #transcript-debug .td-list .td-entry.matched { color: var(--accent); }
+    #transcript-debug .td-list .td-entry .td-tag {
+      display: inline-block;
+      min-width: 44px;
+      color: var(--dim);
+      margin-right: 6px;
+    }
+
     #result-actions {
       display: flex;
       gap: 12px;
@@ -529,6 +585,16 @@
 
     <div id="diagnostics"></div>
 
+    <div id="last-heard-row">
+      <span class="lh-label">Last heard:</span>
+      <span class="lh-value" id="last-heard-value">—</span>
+    </div>
+
+    <div id="transcript-debug">
+      <div class="td-label">Recent transcripts (debug)</div>
+      <div class="td-list" id="transcript-list"></div>
+    </div>
+
     <div id="result-actions">
       <button id="result-save">Save Raw Data</button>
       <button id="result-close">Next Swing</button>
@@ -544,36 +610,39 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.2.3
+    // Golf Coach v0.2.4
+    //
+    // Changes from v0.2.3:
+    //   + Shape chime simplified to single-oscillator envelope — fixes
+    //     desktop Edge silence (two-oscillator version worked on AirPods
+    //     but not desktop; likely linearRamp precision issue).
+    //   + "Last heard" display now inside the result panel — previously
+    //     the bottom-pill and status bar were both hidden under the
+    //     full-screen result panel during the waiting state.
+    //   + Transcript debug log: last 3 recognized phrases shown in the
+    //     result panel, so we can see what Safari actually returns and
+    //     diagnose words that don't match ("straight", "bad", "pull"
+    //     reported as non-triggering in v0.2.3 testing).
     //
     // Changes from v0.2.2:
     //   + Audio confirmation when a shape word is recognized — short chime
     //     so the golfer doesn't have to look at the phone to know the system
     //     heard them. Generic tone regardless of which shape (the word is
     //     written to the JSON anyway if the user wants to verify later).
-    //   + Status bar briefly shows "heard: pull" alongside the chime, for the
-    //     rare case the golfer does glance at the screen.
     //
     // Changes from v0.2.1:
-    //   + Peak detector fix: accepts flat plateaus as valid minima (Finish
-    //     positions are often plateaus — hands held high at end of swing)
-    //   + Edge-aware prominence: a peak at the end of the recording buffer
-    //     is measured against the valley on the other side, not rejected
-    //     for lack of a right-side descent
-    //   Together these fix "Incomplete swing" false negatives on real swings
-    //   where the Finish was captured but plateau'd to end of recording.
+    //   + Peak detector fix: accepts flat plateaus as valid minima
+    //   + Edge-aware prominence: handles peaks cut off by recording end
+    //   Together these fix "Incomplete swing" false negatives.
     //
     // Changes from v0.2.0:
     //   + Hands-free session loop: recording auto-stops after RECORDING_DURATION_MS
     //   + New 'waiting' state after analysis: listens for shape words OR "ready"
-    //   + Shape reporting toggle — when on, listens for 6 shape words between swings
-    //   + Shape logged silently into swing record (no per-swing UI, per brief)
-    //   + "ready" during waiting state dismisses result panel and starts next countdown
+    //   + Shape reporting toggle
     //
     // Unchanged from v0.2.0 / v0.1.6:
     //   - Pinned MediaPipe Pose @0.5.1675469404
-    //   - Camera, pose pump, drawing, audio tones, tempo analysis (algorithm SHAPE),
-    //     chart, result UI
+    //   - Camera, pose pump, drawing, tempo analysis, chart, result UI shell
     // ============================================================
 
     const COUNTDOWN_SECONDS = 6;
@@ -624,6 +693,9 @@
     const voiceToggle = document.getElementById('voice-toggle');
     const shapeToggle = document.getElementById('shape-toggle');
     const shapeHeardEl = document.getElementById('shape-heard');
+    // v0.2.4
+    const lastHeardValue = document.getElementById('last-heard-value');
+    const transcriptList = document.getElementById('transcript-list');
 
     let pose = null;
     let appState = 'idle';
@@ -715,34 +787,28 @@
       osc.stop(now + 0.1);
     }
 
-    // v0.2.3: short, neutral confirmation chime played when a shape word is
-    // recognized. Two rising notes (~150ms total) — clearly distinct from:
-    //   - playTick() 440 Hz single beep of countdown
-    //   - playBeep() 880 Hz single swing-start beep
-    // Data-neutral, per the "data over judgment" principle in the brief.
+    // v0.2.3 / v0.2.4: short, neutral confirmation chime played when a shape
+    // word is recognized. Single oscillator with a frequency sweep — matches
+    // the envelope style of playBeep/playTick which are known to work on both
+    // desktop Edge and iOS Safari. The previous two-oscillator version played
+    // fine on mobile (AirPods) but was silent on desktop Edge.
     function playShapeChime() {
       if (!audioCtx) return;
       const now = audioCtx.currentTime;
-      // Note 1 at 660 Hz
-      const o1 = audioCtx.createOscillator();
-      const g1 = audioCtx.createGain();
-      o1.type = 'sine';
-      o1.frequency.setValueAtTime(660, now);
-      g1.gain.setValueAtTime(0, now);
-      g1.gain.linearRampToValueAtTime(0.14, now + 0.01);
-      g1.gain.linearRampToValueAtTime(0, now + 0.07);
-      o1.connect(g1); g1.connect(audioCtx.destination);
-      o1.start(now); o1.stop(now + 0.09);
-      // Note 2 at 990 Hz (perfect fifth above), slight overlap
-      const o2 = audioCtx.createOscillator();
-      const g2 = audioCtx.createGain();
-      o2.type = 'sine';
-      o2.frequency.setValueAtTime(990, now + 0.06);
-      g2.gain.setValueAtTime(0, now + 0.06);
-      g2.gain.linearRampToValueAtTime(0.14, now + 0.07);
-      g2.gain.linearRampToValueAtTime(0, now + 0.14);
-      o2.connect(g2); g2.connect(audioCtx.destination);
-      o2.start(now + 0.06); o2.stop(now + 0.16);
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      // Sweep from 660 Hz up to 990 Hz (perfect fifth) over the tone's length,
+      // giving the "rising" feel of a confirmation chime.
+      osc.frequency.setValueAtTime(660, now);
+      osc.frequency.linearRampToValueAtTime(990, now + 0.14);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.2, now + 0.02);
+      gain.gain.linearRampToValueAtTime(0, now + 0.16);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.18);
     }
 
     async function setupPose() {
@@ -887,15 +953,26 @@
 
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
           const r = ev.results[i];
+          // v0.2.4: log every candidate transcript to the debug panel,
+          // whether it matched or not. First candidate (top alternative)
+          // is what we'd normally see; we log all alternatives tagged
+          // with index, to surface what Safari is actually hearing.
+          const candidates = [];
           for (let a = 0; a < r.length; a++) {
-            const text = r[a].transcript.toLowerCase().trim();
+            candidates.push(r[a].transcript.toLowerCase().trim());
+          }
 
-            // "ready" works in both idle and waiting. In waiting it means
-            // "I'm done with this swing, let's start the next one."
+          let matchedWord = null;
+          let matchedKind = null; // 'ready' | 'shape' | null
+
+          for (let a = 0; a < r.length; a++) {
+            const text = candidates[a];
+
+            // "ready" works in both idle and waiting.
             if (matchesReady(text)) {
-              if (appState === 'waiting') onReadyInWaitingState();
-              else onVoiceReady();
-              return;
+              matchedWord = 'ready';
+              matchedKind = 'ready';
+              break;
             }
 
             // Shape words only count in the waiting state, and only when
@@ -903,16 +980,63 @@
             if (appState === 'waiting' && shapeEnabled) {
               const shape = matchesShapeWord(text);
               if (shape) {
-                onShapeHeard(shape);
-                // don't return — keep scanning in case "ready" follows in the
-                // same result batch. But most of the time this ends the loop
-                // for this event.
-                return;
+                matchedWord = shape;
+                matchedKind = 'shape';
+                break;
               }
             }
           }
+
+          // Log to transcript debug panel (top-1 candidate with "+N alts"
+          // hint if there were alternatives, plus interim/final tag).
+          logTranscript({
+            text: candidates[0] || '(empty)',
+            altCount: candidates.length - 1,
+            isFinal: r.isFinal,
+            matched: matchedWord,
+            matchedKind
+          });
+
+          if (matchedKind === 'ready') {
+            if (appState === 'waiting') onReadyInWaitingState();
+            else onVoiceReady();
+            return;
+          }
+          if (matchedKind === 'shape') {
+            onShapeHeard(matchedWord);
+            return;
+          }
         }
       };
+    }
+
+    // v0.2.4: rolling buffer of recent transcripts visible in the result panel.
+    // Helps diagnose "word not recognized" issues by showing what the recognizer
+    // actually returned — e.g. "pull" often comes back as "pole" or "pol".
+    const TRANSCRIPT_HISTORY_MAX = 6;
+    const transcriptHistory = [];
+    function logTranscript({ text, altCount, isFinal, matched, matchedKind }) {
+      transcriptHistory.unshift({ text, altCount, isFinal, matched, matchedKind });
+      if (transcriptHistory.length > TRANSCRIPT_HISTORY_MAX) {
+        transcriptHistory.length = TRANSCRIPT_HISTORY_MAX;
+      }
+      renderTranscriptHistory();
+    }
+    function renderTranscriptHistory() {
+      if (!transcriptList) return;
+      transcriptList.innerHTML = '';
+      for (const entry of transcriptHistory) {
+        const row = document.createElement('div');
+        row.className = 'td-entry' + (entry.matched ? ' matched' : '');
+        const tag = entry.isFinal ? 'final' : 'interim';
+        const altsStr = entry.altCount > 0 ? ` (+${entry.altCount})` : '';
+        const matchStr = entry.matched
+          ? `  → ${entry.matchedKind}: ${entry.matched}`
+          : '';
+        row.innerHTML =
+          `<span class="td-tag">${tag}</span>"${entry.text}"${altsStr}${matchStr}`;
+        transcriptList.appendChild(row);
+      }
     }
 
     function matchesReady(text) {
@@ -923,15 +1047,22 @@
     }
 
     // v0.2.1: match one of the 6 shape words as a whole word.
-    // Returns the canonical word on match, or null.
+    // v0.2.4: expanded with common Safari mishears reported from phone testing
+    // where "pull", "straight", "bad" frequently failed to match.
     function matchesShapeWord(text) {
       const padded = ' ' + text.replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ') + ' ';
+      // Canonical words first.
       for (const word of SHAPE_WORDS) {
         const re = new RegExp(' ' + word + ' ');
         if (re.test(padded)) return word;
       }
-      // A couple of common mishears for "bad" (bad contact) — conservative.
-      if (/ bat | bud /.test(padded)) return 'bad';
+      // Common mishears — conservative, each verified to be unambiguous.
+      if (/ pole | poll | paul | pool | pul /.test(padded)) return 'pull';
+      if (/ bat | bud | bed | bet /.test(padded))          return 'bad';
+      if (/ strait | strayed | straighten /.test(padded))   return 'straight';
+      if (/ hoop | hock /.test(padded))                     return 'hook';
+      if (/ splice | slight /.test(padded))                 return 'slice';
+      if (/ posh /.test(padded))                            return 'push';
       return null;
     }
 
@@ -941,10 +1072,25 @@
       if (lastAnalysis) lastAnalysis.shape = word;
       showShapeHeardPill(word);
       // v0.2.3: audio confirmation — the golfer can't see the screen from
-      // 2m away in stance. Chime says "got it, logged." Also update the
-      // status bar in case they do glance at the phone.
+      // 2m away in stance. Chime says "got it, logged."
       playShapeChime();
+      // v0.2.4: persistent display inside the result panel (was previously
+      // hidden under the fullscreen panel).
+      updateLastHeardDisplay(word);
+      // Status-bar flash is kept, though it's mostly obscured by the panel
+      // — still useful on very tall screens where the controls peek out.
       flashStatusShapeHeard(word);
+    }
+
+    function updateLastHeardDisplay(word) {
+      if (!lastHeardValue) return;
+      if (word) {
+        lastHeardValue.textContent = word;
+        lastHeardValue.classList.remove('empty');
+      } else {
+        lastHeardValue.textContent = '—';
+        lastHeardValue.classList.add('empty');
+      }
     }
 
     function showShapeHeardPill(word) {
@@ -1074,6 +1220,7 @@
       recordingStartTime = performance.now();
       beepTime = 0;
       pendingShape = null;
+      updateLastHeardDisplay(null); // v0.2.4: reset for the new swing
       appState = 'recording';
       recordBtn.textContent = 'Stop';
       recordBtn.classList.remove('counting');
