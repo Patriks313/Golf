@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.2.1</title>
+  <title>Golf Coach — v0.2.2</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -544,7 +544,16 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.2.1
+    // Golf Coach v0.2.2
+    //
+    // Changes from v0.2.1:
+    //   + Peak detector fix: accepts flat plateaus as valid minima (Finish
+    //     positions are often plateaus — hands held high at end of swing)
+    //   + Edge-aware prominence: a peak at the end of the recording buffer
+    //     is measured against the valley on the other side, not rejected
+    //     for lack of a right-side descent
+    //   Together these fix "Incomplete swing" false negatives on real swings
+    //   where the Finish was captured but plateau'd to end of recording.
     //
     // Changes from v0.2.0:
     //   + Hands-free session loop: recording auto-stops after RECORDING_DURATION_MS
@@ -555,7 +564,8 @@
     //
     // Unchanged from v0.2.0 / v0.1.6:
     //   - Pinned MediaPipe Pose @0.5.1675469404
-    //   - Camera, pose pump, drawing, audio tones, tempo analysis, chart, result UI
+    //   - Camera, pose pump, drawing, audio tones, tempo analysis (algorithm SHAPE),
+    //     chart, result UI
     // ============================================================
 
     const COUNTDOWN_SECONDS = 6;
@@ -568,7 +578,13 @@
     const MIC_RESTART_DELAY_MS = 400;
 
     // v0.2.1 hands-free loop tunables
-    const RECORDING_DURATION_MS = 3000;        // auto-stop recording 3s after beep
+    // v0.2.2: RECORDING_DURATION_MS bumped from 3000 → 4000. 3s was too short —
+    // a typical swing sequence is: settle-after-beep (~500ms) + swing-to-finish
+    // (~2000ms) + hold-at-finish (~500ms) = ~3s minimum, but leaves no margin
+    // for anything slower. 4000ms matches MAX_SWING_MS (the analysis window
+    // length) so we're using one consistent value: "no real swing takes longer
+    // than this." Real-time end-of-swing detection is a v0.3+ improvement.
+    const RECORDING_DURATION_MS = 4000;        // auto-stop recording 4s after beep
     const SHAPE_HEARD_FLASH_MS   = 1400;       // how long the "heard: pull" pill shows
     const SHAPE_WORDS = ['straight', 'pull', 'push', 'hook', 'slice', 'bad'];
 
@@ -1034,26 +1050,90 @@
     }
 
     // --- Peak finder (local minima of wristY = hands high) -------------------
+    // v0.2.2: plateau-tolerant local-minimum detector with edge-aware prominence.
+    //
+    // Two bugs in v0.2.1 combined to cause "Incomplete swing" on real swings
+    // whose Finish was a plateau (hands held high at end of swing) or was
+    // truncated by the end of the recording buffer:
+    //
+    // 1) The previous strict "<" both-neighbors check rejected any plateau
+    //    where consecutive frames had equal wristY. Finish positions are
+    //    often plateaus. We now accept a frame as a minimum if the nearest
+    //    non-equal neighbors on each side are both strictly higher (or run
+    //    off the edge of the array). Plateau de-duplication keeps only the
+    //    first frame of a flat stretch.
+    //
+    // 2) The previous prominence check scanned outward until it found a
+    //    value LOWER than the peak; if the scan ran off the end while
+    //    collecting a rising slope (e.g. the Finish plateau extends to
+    //    end-of-recording) the prominence was still computed correctly
+    //    using the max seen — BUT if the global minimum of the window was
+    //    the Top itself, both scans ran off the edge and the old code
+    //    computed Math.min(leftMax, rightMax) which for the Finish-
+    //    plateau-truncated case underestimated prominence. We now only
+    //    bail out to prom=0 when a side is truly flat-or-falling from
+    //    the peak (i.e. its running max never exceeded y[p]) — a side
+    //    that rose significantly before running off the edge is a valid
+    //    basin wall for prominence purposes.
     function findPeaks(y, minProminence) {
-      const peaks = [];
       const n = y.length;
+      const peaks = [];
       for (let i = 1; i < n - 1; i++) {
-        if (y[i] < y[i-1] && y[i] < y[i+1]) peaks.push(i);
+        // find nearest left and right neighbors with different y
+        let left = i - 1;
+        while (left >= 0 && y[left] === y[i]) left--;
+        let right = i + 1;
+        while (right < n && y[right] === y[i]) right++;
+        const leftHigher  = (left < 0)  || y[left]  > y[i];
+        const rightHigher = (right >= n) || y[right] > y[i];
+        if (!leftHigher || !rightHigher) continue;
+        // dedupe plateaus: only keep first frame
+        if (i > 0 && y[i - 1] === y[i]) continue;
+        peaks.push(i);
       }
+
       const prominent = [];
       for (const p of peaks) {
+        // Walk left from peak, tracking the highest value seen, until we
+        // find a value lower than the peak (meaning we've descended out
+        // of this peak's basin).
         let leftMax = y[p];
+        let leftSawHigher = false;
         for (let i = p - 1; i >= 0; i--) {
           if (y[i] < y[p]) break;
-          if (y[i] > leftMax) leftMax = y[i];
+          if (y[i] > leftMax) { leftMax = y[i]; leftSawHigher = true; }
         }
+        // Same to the right.
         let rightMax = y[p];
+        let rightSawHigher = false;
         for (let i = p + 1; i < n; i++) {
           if (y[i] < y[p]) break;
-          if (y[i] > rightMax) rightMax = y[i];
+          if (y[i] > rightMax) { rightMax = y[i]; rightSawHigher = true; }
         }
-        const prom = Math.min(leftMax, rightMax) - y[p];
-        if (prom >= minProminence) prominent.push({ idx: p, value: y[p], prominence: prom });
+
+        // Prominence:
+        // - If both sides rose above the peak, standard prominence: the
+        //   smaller of the two rises bounds how deep this basin is.
+        // - If only ONE side rose (e.g. a peak at the very end of the
+        //   recording where the right side was cut off), use that side's
+        //   rise alone. This is the key fix for Finish peaks on truncated
+        //   recordings.
+        // - If NEITHER side rose, the "peak" is just a flat or descending
+        //   trace — reject.
+        let prom;
+        if (leftSawHigher && rightSawHigher) {
+          prom = Math.min(leftMax, rightMax) - y[p];
+        } else if (leftSawHigher) {
+          prom = leftMax - y[p];
+        } else if (rightSawHigher) {
+          prom = rightMax - y[p];
+        } else {
+          prom = 0;
+        }
+
+        if (prom >= minProminence) {
+          prominent.push({ idx: p, value: y[p], prominence: prom });
+        }
       }
       return prominent;
     }
@@ -1374,7 +1454,7 @@
       });
 
       lastAnalysis = {
-        version: '0.2.1',
+        version: '0.2.2',
         timestamp: new Date().toISOString(),
         value, verdict,
         shape: pendingShape,         // v0.2.1: populated later if user calls out a shape
