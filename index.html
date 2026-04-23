@@ -1868,6 +1868,12 @@
 
       lastAnalysis = {
         version: '0.3.0',
+        // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
+        // has no notion of identity and works entirely per-device. Kept in
+        // the schema so that IF accounts are ever added later, existing
+        // records can be migrated without a schema change. See brief section
+        // "User tracking and accounts — deliberate v0.x non-goal."
+        userId: 'local',
         timestamp: new Date().toISOString(),
         value, verdict,
         shape: pendingShape,         // v0.2.1: populated later if user calls out a shape
