@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.3.2</title>
+  <title>Golf Coach — v0.3.3</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -609,14 +609,21 @@
     /* Default HTML has both sub-trees present; CSS hides whichever  */
     /* mode isn't active. JS flips the class on #app.                */
 
-    #app.mode-start  #controls     { display: none; }
-    #app.mode-start  #start-screen { display: flex; }
-    #app.mode-session #controls     { display: flex; }
-    #app.mode-session #start-screen { display: none; }
+    #app.mode-start   #controls      { display: none; }
+    #app.mode-start   #start-screen  { display: flex; }
+    #app.mode-start   #review-screen { display: none; }
+    #app.mode-session #controls      { display: flex; }
+    #app.mode-session #start-screen  { display: none; }
+    #app.mode-session #review-screen { display: none; }
+    #app.mode-review  #controls      { display: none; }
+    #app.mode-review  #start-screen  { display: none; }
+    #app.mode-review  #review-screen { display: flex; }
 
     /* v0.3.1 patch: End session moved to result panel — no mode-class CSS
-       needed for it anymore. It only appears when the result panel is
-       visible, which is always an in-session event. */
+       needed for it anymore. v0.3.3: End session button still lives on the
+       result panel; its click now routes to review mode instead of confirm. */
+
+    #app.mode-review  #video-container { display: none; }
 
     /* ----------------- Start screen layout ---------------------- */
     #start-screen {
@@ -712,6 +719,131 @@
     }
     #start-session-btn:active { opacity: 0.8; }
 
+    /* ============================================================ */
+    /* v0.3.3: Session review screen                                */
+    /* ============================================================ */
+    #review-screen {
+      flex: 1;
+      flex-direction: column;
+      padding: 20px 20px calc(env(safe-area-inset-bottom, 20px) + 20px);
+      background: var(--bg);
+      overflow-y: auto;
+      gap: 20px;
+    }
+
+    .review-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(138, 135, 120, 0.25);
+    }
+
+    .review-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--fg);
+      letter-spacing: 0.3px;
+    }
+
+    .review-summary {
+      font-size: 14px;
+      color: var(--dim);
+    }
+
+    .review-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .review-section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--dim);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .review-empty {
+      font-size: 14px;
+      color: var(--dim);
+      font-style: italic;
+      padding: 10px 0;
+    }
+
+    /* Canvas wrappers — responsive box that the canvas fills. */
+    .review-chart-box {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    #review-dist-canvas, #review-avg-canvas {
+      width: 100%;
+      height: 200px;
+      display: block;
+    }
+
+    /* Per-swing table */
+    .review-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .review-table th {
+      text-align: left;
+      padding: 8px 6px;
+      font-weight: 600;
+      color: var(--dim);
+      border-bottom: 1px solid rgba(138, 135, 120, 0.3);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .review-table td {
+      padding: 8px 6px;
+      color: var(--fg);
+      border-bottom: 1px solid rgba(138, 135, 120, 0.12);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .review-table tr.good td:first-child { border-left: 3px solid var(--accent); padding-left: 8px; }
+    .review-table tr.off  td:first-child { border-left: 3px solid var(--warn); padding-left: 8px; }
+    .review-table tr.error td:first-child { border-left: 3px solid var(--error); padding-left: 8px; }
+
+    .review-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    #review-export-btn, #review-discard-btn {
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      border-radius: 10px;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+    }
+
+    #review-export-btn {
+      background: transparent;
+      border: 1px solid var(--fg);
+      color: var(--fg);
+    }
+
+    #review-discard-btn {
+      background: transparent;
+      border: 1px solid rgba(217, 95, 67, 0.7);
+      color: var(--error);
+    }
+
+    #review-export-btn:active, #review-discard-btn:active { opacity: 0.75; }
+
     /* ----------------- End-session button (in-session) ---------- */
     /* v0.3.1 patch: End session was briefly a floating top-right button,
        but field testing showed it was easier to put it on the result panel
@@ -723,64 +855,8 @@
        uses during session. Stack vertically if both are visible. */
     /* v0.3.1 patch: no longer needed now that end-session moved to result panel */
 
-    /* ----------------- Confirm dialog --------------------------- */
-    #confirm-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.7);
-      display: none;
-      justify-content: center;
-      align-items: center;
-      z-index: 20;
-    }
-    #confirm-overlay.visible { display: flex; }
-
-    #confirm-box {
-      background: var(--bg);
-      border: 1px solid rgba(138, 135, 120, 0.35);
-      border-radius: 14px;
-      padding: 22px 20px;
-      max-width: 300px;
-      width: calc(100% - 40px);
-      text-align: center;
-    }
-
-    #confirm-title {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 8px;
-      color: var(--fg);
-    }
-
-    #confirm-body {
-      font-size: 14px;
-      color: var(--dim);
-      margin-bottom: 18px;
-    }
-
-    .confirm-btn-row {
-      display: flex;
-      gap: 10px;
-      justify-content: center;
-    }
-
-    .confirm-btn {
-      flex: 1;
-      padding: 10px 16px;
-      border-radius: 10px;
-      border: none;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .confirm-btn.cancel {
-      background: rgba(255,255,255,0.1);
-      color: var(--fg);
-    }
-    .confirm-btn.confirm {
-      background: var(--error);
-      color: #0f1712;
-    }
+    /* v0.3.3: confirm-dialog CSS removed — the dialog was replaced by the
+       review screen, which is its own DOM block. */
   </style>
 </head>
 <body>
@@ -836,16 +912,57 @@
       <div id="status">Say &ldquo;ready&rdquo; when you&rsquo;re at address.</div>
       <button id="record-btn" disabled>Next Swing</button>
     </div>
-  </div>
 
-  <!-- v0.3.1: End-session confirmation dialog -->
-  <div id="confirm-overlay">
-    <div id="confirm-box">
-      <div id="confirm-title">End this session?</div>
-      <div id="confirm-body">Swing data from this session will be dropped. You can start a new session after.</div>
-      <div class="confirm-btn-row">
-        <button id="confirm-cancel" class="confirm-btn cancel">Cancel</button>
-        <button id="confirm-end" class="confirm-btn confirm">End session</button>
+    <!-- v0.3.3: session review screen (mode-review). Replaces the v0.3.1/v0.3.2
+         confirm-dialog flow entirely. End session from the result panel now
+         routes straight here; user reviews their session, optionally exports
+         to CSV, then taps Discard and end to return to start. -->
+    <div id="review-screen">
+      <div class="review-header">
+        <div class="review-title">Session review</div>
+        <div class="review-summary" id="review-summary">—</div>
+      </div>
+
+      <div class="review-section" id="review-dist-section">
+        <div class="review-section-title">Tempo distribution</div>
+        <div class="review-chart-box">
+          <canvas id="review-dist-canvas"></canvas>
+        </div>
+      </div>
+
+      <div class="review-section" id="review-avg-section">
+        <div class="review-section-title">Average swing shape</div>
+        <div class="review-chart-box">
+          <canvas id="review-avg-canvas"></canvas>
+        </div>
+        <div class="review-empty" id="review-avg-empty" style="display:none;">
+          Need at least 3 complete swings for the average shape.
+        </div>
+      </div>
+
+      <div class="review-section" id="review-table-section">
+        <div class="review-section-title">Swings</div>
+        <table class="review-table" id="review-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Back (ms)</th>
+              <th>Down (ms)</th>
+              <th>Ratio</th>
+              <th>Shape</th>
+            </tr>
+          </thead>
+          <tbody id="review-table-body"></tbody>
+        </table>
+      </div>
+
+      <div class="review-empty" id="review-empty-state" style="display:none;">
+        No swings yet — session ended before any swing was recorded.
+      </div>
+
+      <div class="review-actions">
+        <button id="review-export-btn">Download session CSV</button>
+        <button id="review-discard-btn">Discard and end</button>
       </div>
     </div>
   </div>
@@ -920,7 +1037,38 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.3.2
+    // Golf Coach v0.3.3
+    //
+    // Changes from v0.3.2:
+    //   + Session review screen. End session no longer goes directly back
+    //     to start; it routes through a review screen showing aggregate
+    //     stats, a tempo-ratio distribution bar chart, an averaged W-shape
+    //     chart (when ≥3 complete swings), and a per-swing table.
+    //   + CSV export from the review screen — one row per swing, flat
+    //     summary columns (no frames data). Raw-data JSON download is
+    //     still available per-swing from the result panel's debug view.
+    //   + "Discard and end" button on the review screen replaces the old
+    //     confirm dialog. The review IS the confirmation — user sees what
+    //     they did, then explicitly discards.
+    //   + In-memory `sessionSwings` array accumulates lightweight swing
+    //     records through the session. Dropped on Discard and end. Not
+    //     persisted (that's v0.3.4).
+    //   + Old confirm-dialog DOM + handlers removed.
+    //   + New app state: 'review'. Reached by tapping End session from
+    //     the result panel. Exits to 'start' via Discard and end.
+    //
+    // Scope discipline — explicitly NOT in v0.3.3:
+    //   - No IndexedDB persistence (v0.3.4)
+    //   - No multi-session review (v0.3.5+)
+    //   - No chart library (all canvas hand-rolled, same pattern as W-chart)
+    //   - No xlsx export (CSV only)
+    //   - No per-user baselines, no LLM summary (v0.6+)
+    //   - No "mid-session review so far" button
+    //
+    // See v0_3_3_design.md for full layout and content rules.
+    //
+    // ============================================================
+    // Golf Coach v0.3.2 (kept for reference — behavior below still applies)
     //
     // Changes from v0.3.1:
     //   + Result panel redesigned from dev-era diagnostic view into a
@@ -1131,9 +1279,19 @@
     const startSessionBtn = document.getElementById('start-session-btn');
     const endSessionBtn = document.getElementById('result-end');  // v0.3.1 patch: on result panel
     const drillTile = document.getElementById('drill-tile');
-    const confirmOverlay = document.getElementById('confirm-overlay');
-    const confirmCancelBtn = document.getElementById('confirm-cancel');
-    const confirmEndBtn = document.getElementById('confirm-end');
+    // v0.3.3 additions
+    const reviewScreen = document.getElementById('review-screen');
+    const reviewSummary = document.getElementById('review-summary');
+    const reviewDistCanvas = document.getElementById('review-dist-canvas');
+    const reviewAvgCanvas = document.getElementById('review-avg-canvas');
+    const reviewAvgSection = document.getElementById('review-avg-section');
+    const reviewAvgEmpty = document.getElementById('review-avg-empty');
+    const reviewTableBody = document.getElementById('review-table-body');
+    const reviewTableSection = document.getElementById('review-table-section');
+    const reviewDistSection = document.getElementById('review-dist-section');
+    const reviewEmptyState = document.getElementById('review-empty-state');
+    const reviewExportBtn = document.getElementById('review-export-btn');
+    const reviewDiscardBtn = document.getElementById('review-discard-btn');
 
     let pose = null;
     let appState = 'start';   // v0.3.1: was 'idle'; 'idle' now means in-session between swings
@@ -1164,12 +1322,18 @@
     // start page is identical every time, per design spec Group C #8/#9.
     let sessionConfig = null;
 
+    // v0.3.3: in-memory accumulator of swings taken this session. Each entry
+    // is a lightweight copy of the swing record (no frames array — those can
+    // be multi-KB each; we don't need them for review). Dropped on Discard
+    // and end. Not persisted (v0.3.4 adds that).
+    let sessionSwings = [];
+
     // v0.3.1: mode-flip helpers. Camera keeps running across the flip —
     // we don't stop/restart the pose pump or getUserMedia stream, just
     // swap which DOM sub-tree is visible via a class on #app.
     function enterStartMode() {
       appState = 'start';
-      appRoot.classList.remove('mode-session');
+      appRoot.classList.remove('mode-session', 'mode-review');
       appRoot.classList.add('mode-start');
       // Hide any in-session overlays that might linger.
       resultPanel.classList.remove('visible');
@@ -1177,7 +1341,6 @@
       recBorder.classList.remove('active');
       listenIndicator.classList.remove('active');
       shapeHeardEl.classList.remove('visible');
-      confirmOverlay.classList.remove('visible');
       // Kill any pending timers so a background recording/countdown can't
       // leak into a fresh session.
       if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
@@ -1190,7 +1353,7 @@
 
     function enterSessionMode() {
       appState = 'idle';
-      appRoot.classList.remove('mode-start');
+      appRoot.classList.remove('mode-start', 'mode-review');
       appRoot.classList.add('mode-session');
       recordBtn.textContent = 'Next Swing';
       recordBtn.disabled = false;
@@ -1199,6 +1362,285 @@
         : 'Tap Next Swing when you’re ready.';
       // If voice trigger is on, start recognition listening for "ready".
       if (voiceEnabled) startRecognition();
+    }
+
+    // v0.3.3: enter review mode. Stops recognition, hides result panel,
+    // builds the review screen content from sessionSwings.
+    function enterReviewMode() {
+      appState = 'review';
+      stopRecognition();
+      listenIndicator.classList.remove('active');
+      resultPanel.classList.remove('visible');
+      // Kill any active timers — user taps End session mid-countdown, e.g.
+      if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+      if (readyDelayTimer) { clearTimeout(readyDelayTimer); readyDelayTimer = null; }
+      if (recordingAutoStopTimer) { clearTimeout(recordingAutoStopTimer); recordingAutoStopTimer = null; }
+      appRoot.classList.remove('mode-start', 'mode-session');
+      appRoot.classList.add('mode-review');
+      renderReview();
+    }
+
+    // v0.3.3: render the review screen from sessionSwings. Called once on
+    // entry. Safe to call again on window resize (charts re-draw) but we
+    // don't wire that up in v0.3.3 — scope creep.
+    function renderReview() {
+      const swings = sessionSwings;
+      const n = swings.length;
+
+      if (n === 0) {
+        reviewSummary.textContent = 'Session ended before any swing was recorded.';
+        reviewDistSection.style.display = 'none';
+        reviewAvgSection.style.display = 'none';
+        reviewTableSection.style.display = 'none';
+        reviewEmptyState.style.display = 'block';
+        reviewExportBtn.style.display = 'none';
+        return;
+      }
+
+      // Normal case: at least one swing.
+      reviewDistSection.style.display = '';
+      reviewTableSection.style.display = '';
+      reviewEmptyState.style.display = 'none';
+      reviewExportBtn.style.display = '';
+
+      // --- Aggregate summary -------------------------------------------
+      const goodCount = swings.filter(s => s.verdictClass === 'good').length;
+      const pctInRange = Math.round((goodCount / n) * 100);
+      const swingsWithRatio = swings.filter(s => typeof s.ratio === 'number' && isFinite(s.ratio));
+      let avgText = '';
+      if (swingsWithRatio.length > 0) {
+        const sum = swingsWithRatio.reduce((a, s) => a + s.ratio, 0);
+        const mean = sum / swingsWithRatio.length;
+        avgText = ` · avg tempo ${mean.toFixed(1)}:1`;
+      }
+      const label = n === 1 ? 'swing' : 'swings';
+      reviewSummary.textContent = `${n} ${label} · ${pctInRange}% in range${avgText}`;
+
+      // --- Distribution chart ------------------------------------------
+      drawDistributionChart(swingsWithRatio);
+
+      // --- Average swing shape -----------------------------------------
+      // Need swings that have a full W (address/top/impact/finish all set)
+      // AND a wristY trace. At least 3 for a meaningful average.
+      const completeForAvg = swings.filter(s =>
+        Array.isArray(s.wristY) && s.wristY.length >= 10 &&
+        typeof s.addressIdx === 'number' &&
+        typeof s.finishIdx === 'number' &&
+        s.finishIdx > s.addressIdx
+      );
+
+      if (completeForAvg.length >= 3) {
+        reviewAvgSection.style.display = '';
+        reviewAvgCanvas.style.display = '';
+        reviewAvgEmpty.style.display = 'none';
+        drawAverageShape(completeForAvg);
+      } else {
+        reviewAvgSection.style.display = '';
+        reviewAvgCanvas.style.display = 'none';
+        reviewAvgEmpty.style.display = 'block';
+      }
+
+      // --- Per-swing table ---------------------------------------------
+      renderSwingTable(swings);
+    }
+
+    // v0.3.3: distribution chart. Six buckets for the tempo ratio.
+    function drawDistributionChart(swingsWithRatio) {
+      const BUCKETS = [
+        { label: '<2.0',    test: r => r < 2.0,               cls: 'error' },
+        { label: '2.0–2.4', test: r => r >= 2.0 && r < 2.5,   cls: 'off' },
+        { label: '2.5–2.9', test: r => r >= 2.5 && r < 3.0,   cls: 'good' },
+        { label: '3.0–3.4', test: r => r >= 3.0 && r < 3.5,   cls: 'good' },
+        { label: '3.5–3.9', test: r => r >= 3.5 && r < 4.0,   cls: 'off' },
+        { label: '≥4.0',    test: r => r >= 4.0,              cls: 'error' }
+      ];
+      const counts = BUCKETS.map(b => swingsWithRatio.filter(s => b.test(s.ratio)).length);
+      const maxCount = Math.max(1, ...counts);
+
+      const canvas = reviewDistCanvas;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      const w = rect.width, h = rect.height;
+      const padL = 12, padR = 12, padT = 18, padB = 28;
+      const plotW = w - padL - padR;
+      const plotH = h - padT - padB;
+      const barSpacing = 8;
+      const barW = (plotW - barSpacing * (BUCKETS.length - 1)) / BUCKETS.length;
+
+      const colorFor = {
+        good: getCssVar('--accent') || '#9bc53d',
+        off:  getCssVar('--warn')   || '#e5a823',
+        error: getCssVar('--error') || '#d95f43'
+      };
+      const dim = getCssVar('--dim') || '#8a8778';
+
+      ctx.font = '11px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+
+      for (let i = 0; i < BUCKETS.length; i++) {
+        const count = counts[i];
+        const x = padL + i * (barW + barSpacing);
+        const barH = count === 0 ? 2 : (count / maxCount) * plotH;
+        const y = padT + plotH - barH;
+        ctx.fillStyle = count === 0 ? 'rgba(138,135,120,0.25)' : colorFor[BUCKETS[i].cls];
+        ctx.fillRect(x, y, barW, barH);
+
+        // Count label above bar
+        if (count > 0) {
+          ctx.fillStyle = getCssVar('--fg') || '#e8e4d8';
+          ctx.fillText(String(count), x + barW / 2, y - 4);
+        }
+        // Bucket label below
+        ctx.fillStyle = dim;
+        ctx.fillText(BUCKETS[i].label, x + barW / 2, padT + plotH + 14);
+      }
+    }
+
+    // v0.3.3: average swing shape. Samples each qualifying wristY trace at a
+    // fixed number of points between address and finish, normalising time,
+    // then averages point-by-point and draws the mean curve.
+    function drawAverageShape(completeSwings) {
+      const SAMPLES = 40;
+      // Build per-swing normalised trace
+      const traces = completeSwings.map(s => {
+        const a = s.addressIdx, f = s.finishIdx;
+        const slice = s.wristY.slice(a, f + 1);
+        if (slice.length < 2) return null;
+        // Resample to SAMPLES points linearly
+        const out = new Array(SAMPLES);
+        for (let i = 0; i < SAMPLES; i++) {
+          const t = (i / (SAMPLES - 1)) * (slice.length - 1);
+          const i0 = Math.floor(t), i1 = Math.min(slice.length - 1, i0 + 1);
+          const f0 = slice[i0], f1 = slice[i1];
+          const w = t - i0;
+          out[i] = f0 * (1 - w) + f1 * w;
+        }
+        return out;
+      }).filter(Boolean);
+
+      // Average across traces
+      const mean = new Array(SAMPLES).fill(0);
+      for (const t of traces) {
+        for (let i = 0; i < SAMPLES; i++) mean[i] += t[i];
+      }
+      for (let i = 0; i < SAMPLES; i++) mean[i] /= traces.length;
+
+      // Draw
+      const canvas = reviewAvgCanvas;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      const w = rect.width, h = rect.height;
+      const padL = 20, padR = 20, padT = 18, padB = 22;
+      const plotW = w - padL - padR;
+      const plotH = h - padT - padB;
+
+      const minY = Math.min(...mean);
+      const maxY = Math.max(...mean);
+      const yRange = Math.max(0.01, maxY - minY);
+
+      const toPx = i => padL + (i / (SAMPLES - 1)) * plotW;
+      const toPy = y => padT + ((y - minY) / yRange) * plotH;
+
+      ctx.strokeStyle = getCssVar('--accent') || '#9bc53d';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < SAMPLES; i++) {
+        const px = toPx(i), py = toPy(mean[i]);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // Axis labels
+      ctx.fillStyle = getCssVar('--dim') || '#8a8778';
+      ctx.font = '10px -apple-system, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('Address', padL, padT + plotH + 14);
+      ctx.textAlign = 'right';
+      ctx.fillText('Finish', padL + plotW, padT + plotH + 14);
+    }
+
+    // v0.3.3: per-swing table. One row per swing, coloured by verdictClass.
+    function renderSwingTable(swings) {
+      reviewTableBody.innerHTML = '';
+      for (let i = 0; i < swings.length; i++) {
+        const s = swings[i];
+        const tr = document.createElement('tr');
+        if (s.verdictClass) tr.className = s.verdictClass;
+        const cells = [
+          String(i + 1),
+          s.backswingMs != null ? String(Math.round(s.backswingMs)) : '—',
+          s.downswingMs != null ? String(Math.round(s.downswingMs)) : '—',
+          (s.ratio != null && isFinite(s.ratio)) ? (s.ratio.toFixed(1) + ':1') : '—',
+          s.shape || '—'
+        ];
+        for (const c of cells) {
+          const td = document.createElement('td');
+          td.textContent = c;
+          tr.appendChild(td);
+        }
+        reviewTableBody.appendChild(tr);
+      }
+    }
+
+    // v0.3.3: small helper to read CSS variable values for canvas rendering.
+    function getCssVar(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    // v0.3.3: session CSV export. Flat one-row-per-swing schema. Raw
+    // wristY/frames data is intentionally NOT in the CSV — that's still in
+    // the per-swing Save Raw Data in the debug view.
+    function exportSessionCSV() {
+      if (sessionSwings.length === 0) return;
+      const header = [
+        'swing_number','timestamp','drill','verdict','verdict_class',
+        'ratio','backswing_ms','downswing_ms','shape',
+        'address_idx','top_idx','impact_idx','finish_idx'
+      ];
+      const rows = sessionSwings.map((s, i) => [
+        i + 1,
+        s.timestamp || '',
+        s.drill || '',
+        csvEscape(s.verdict || ''),
+        s.verdictClass || '',
+        (s.ratio != null && isFinite(s.ratio)) ? s.ratio.toFixed(2) : '',
+        s.backswingMs != null ? Math.round(s.backswingMs) : '',
+        s.downswingMs != null ? Math.round(s.downswingMs) : '',
+        csvEscape(s.shape || ''),
+        s.addressIdx != null ? s.addressIdx : '',
+        s.topIdx != null ? s.topIdx : '',
+        s.impactIdx != null ? s.impactIdx : '',
+        s.finishIdx != null ? s.finishIdx : ''
+      ]);
+      const csv = [header.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `session-${stamp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+    function csvEscape(v) {
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
     }
 
     function showError(title, message) {
@@ -1634,6 +2076,11 @@
       pendingShape = word;
       // Fold into lastAnalysis if it exists, so "Save Raw Data" picks it up.
       if (lastAnalysis) lastAnalysis.shape = word;
+      // v0.3.3: also update the last sessionSwings entry so session review
+      // and CSV export reflect the shape the golfer called post-swing.
+      if (sessionSwings.length > 0) {
+        sessionSwings[sessionSwings.length - 1].shape = word;
+      }
       showShapeHeardPill(word);
       // v0.3.0: TTS echoes the shape word back through earbuds. Replaces the
       // v0.2.3 shape-chime — field testing showed the visual pill is
@@ -2153,6 +2600,7 @@
       ];
 
       let ratioValue = '—';
+      let ratioNum = null;         // v0.3.3: numeric ratio for session-review use
       let verdict = '';
       let verdictClass = '';
 
@@ -2164,6 +2612,7 @@
         verdictClass = 'error';
       } else {
         const ratio = backswingMs / downswingMs;
+        ratioNum = ratio;
         ratioValue = `${ratio.toFixed(1)}:1`;
         if (ratio < 2.0) { verdict = 'Backswing too fast'; verdictClass = 'off'; }
         else if (ratio > 4.0) { verdict = 'Downswing too slow'; verdictClass = 'off'; }
@@ -2175,7 +2624,12 @@
         value: ratioValue, verdict, verdictClass,
         wristY: clippedY,
         addressIdx: cAddress, topIdx: cTop, impactIdx: cImpact, finishIdx: cFinish,
-        diag, warnings
+        diag, warnings,
+        // v0.3.3: pass the raw numeric fields so showResult can push them into
+        // sessionSwings without having to re-parse the "2.8:1" string.
+        ratioNum,
+        backswingMs: backswingMs > 0 ? backswingMs : null,
+        downswingMs: downswingMs > 0 ? downswingMs : null
       });
     }
 
@@ -2282,7 +2736,15 @@
       return verdict || '';
     }
 
-    function showResult({ value, verdict, verdictClass, wristY, addressIdx, topIdx, impactIdx, finishIdx, diag, warnings }) {
+    function showResult({
+      value, verdict, verdictClass,
+      wristY, addressIdx, topIdx, impactIdx, finishIdx,
+      diag, warnings,
+      // v0.3.3: numeric fields for session review. May be undefined on the
+      // early-exit error paths (frames < 15, no pose, recording too short,
+      // incomplete swing) — treated as null in the review record.
+      ratioNum, backswingMs, downswingMs
+    }) {
       // v0.3.0: speak the verdict FIRST, before any DOM work. iOS Safari TTS
       // has ~100-300ms first-utterance latency; kicking it off early means
       // the word lands as close to analysis-complete as possible. Verdict
@@ -2343,7 +2805,7 @@
       });
 
       lastAnalysis = {
-        version: '0.3.2',
+        version: '0.3.3',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -2370,6 +2832,27 @@
           nose: f.landmarks[LM.NOSE]
         }))
       };
+
+      // v0.3.3: push a lightweight copy into sessionSwings for the review
+      // screen. NO `frames` array (too large, not needed for review/CSV).
+      // NO full `wristY` for non-complete swings, but we keep it for
+      // complete ones because the average-shape chart needs it.
+      const isComplete =
+        typeof addressIdx === 'number' &&
+        typeof finishIdx === 'number' &&
+        finishIdx > addressIdx &&
+        Array.isArray(wristY) && wristY.length >= 10;
+      sessionSwings.push({
+        timestamp: lastAnalysis.timestamp,
+        drill: lastAnalysis.drill,
+        verdict, verdictClass,
+        ratio: (typeof ratioNum === 'number' && isFinite(ratioNum)) ? ratioNum : null,
+        backswingMs: (typeof backswingMs === 'number' && backswingMs > 0) ? backswingMs : null,
+        downswingMs: (typeof downswingMs === 'number' && downswingMs > 0) ? downswingMs : null,
+        shape: pendingShape,
+        addressIdx, topIdx, impactIdx, finishIdx,
+        wristY: isComplete ? wristY.slice() : null
+      });
 
       // v0.2.1: enter the 'waiting' state — recognition listens for shape
       // words OR "ready" to start the next swing. This is what makes the
@@ -2511,25 +2994,24 @@
       enterSessionMode();
     });
 
-    // End session — show confirm dialog. Confirm dismisses to start screen;
-    // cancel keeps the session alive. Plumbed this way so a v0.3.3 "Review
-    // now?" popup can be inserted between confirm and the mode flip without
-    // rewiring anything (Group B #7).
+    // v0.3.3: End session now routes to the review screen (no confirm
+    // dialog — the review screen IS the "look before you leap" step).
     endSessionBtn.addEventListener('click', () => {
-      confirmOverlay.classList.add('visible');
+      enterReviewMode();
     });
     endSessionBtn.addEventListener('keydown', (e) => {
       if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); endSessionBtn.click(); }
     });
 
-    confirmCancelBtn.addEventListener('click', () => {
-      confirmOverlay.classList.remove('visible');
+    // v0.3.3: review screen buttons
+    reviewExportBtn.addEventListener('click', () => {
+      exportSessionCSV();
     });
 
-    confirmEndBtn.addEventListener('click', () => {
-      confirmOverlay.classList.remove('visible');
+    reviewDiscardBtn.addEventListener('click', () => {
       // Drop in-memory session data. No persistence (IndexedDB is v0.3.4).
       sessionConfig = null;
+      sessionSwings = [];
       lastAnalysis = null;
       pendingShape = null;
       enterStartMode();
