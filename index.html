@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.2.4</title>
+  <title>Golf Coach — v0.3.0</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -610,9 +610,27 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.2.4
+    // Golf Coach v0.3.0
     //
-    // Changes from v0.2.3:
+    // Changes from v0.2.4:
+    //   + TTS (speechSynthesis) is now the user-facing feedback layer.
+    //     - "ready" is echoed back with TTS when recognized.
+    //     - The tempo verdict is SPOKEN: "in range" / "a little off" / "no swing".
+    //     - When a shape word is recognized, TTS speaks the word back.
+    //   - Countdown removed. "ready" is now said AT ADDRESS; recording opens
+    //     ~1.5s after the TTS echo finishes and runs for 5s (was 4s).
+    //   - Shape-chime removed (playShapeChime still exists as dead code; kept
+    //     for reference — can be deleted later).
+    //   - Stale JSON version string "0.2.2" fixed to "0.3.0".
+    //
+    // Rationale: field testing showed visual confirmation is unreadable
+    // outdoors, and the countdown ceremony was slower than the natural
+    // range-practice rhythm. See brief v3 Sound Design and Roadmap sections.
+    //
+    // Tones tick/beep: functions survive in code but are no longer called
+    // from the standard loop. Left in place as reference for any future mode.
+    //
+    // Changes from v0.2.3 (kept for reference):
     //   + Shape chime simplified to single-oscillator envelope — fixes
     //     desktop Edge silence (two-oscillator version worked on AirPods
     //     but not desktop; likely linearRamp precision issue).
@@ -655,13 +673,18 @@
     const MIC_RESTART_DELAY_MS = 400;
 
     // v0.2.1 hands-free loop tunables
-    // v0.2.2: RECORDING_DURATION_MS bumped from 3000 → 4000. 3s was too short —
-    // a typical swing sequence is: settle-after-beep (~500ms) + swing-to-finish
-    // (~2000ms) + hold-at-finish (~500ms) = ~3s minimum, but leaves no margin
-    // for anything slower. 4000ms matches MAX_SWING_MS (the analysis window
-    // length) so we're using one consistent value: "no real swing takes longer
-    // than this." Real-time end-of-swing detection is a v0.3+ improvement.
-    const RECORDING_DURATION_MS = 4000;        // auto-stop recording 4s after beep
+    // v0.3.0: RECORDING_DURATION_MS bumped from 4000 → 5000. The countdown
+    // used to give the golfer their settle time OUTSIDE the recording window
+    // (6s of ticks, then recording started). v0.3.0 removes the countdown and
+    // uses a short ~1.5s settle pause after the "ready" TTS echo — that's a
+    // tighter settle than 6s, so we add 1s to the recording window to give
+    // slower golfers margin before the swing actually begins. MAX_SWING_MS
+    // stays at 4000 — the analysis window inside the 5s recording is still
+    // 4s from the detected Address frame, which is more than enough for any
+    // real swing. The extra second is just pre-swing margin.
+    const RECORDING_DURATION_MS = 5000;        // auto-stop recording 5s after window opens
+    const POST_READY_DELAY_MS   = 1500;        // v0.3.0: pause between TTS "ready" echo
+                                                //         finishing and recording opening.
     const SHAPE_HEARD_FLASH_MS   = 1400;       // how long the "heard: pull" pill shows
     const SHAPE_WORDS = ['straight', 'pull', 'push', 'hook', 'slice', 'bad'];
 
@@ -703,6 +726,7 @@
     let recordingStartTime = 0;
     let beepTime = 0;
     let countdownTimer = null;
+    let readyDelayTimer = null;     // v0.3.0: settle pause between TTS "ready" and recording open
     let rafId = null;
     let lastAnalysis = null;
     let audioCtx = null;
@@ -753,6 +777,49 @@
     function ensureAudio() {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') audioCtx.resume();
+      ensureSpeech();
+    }
+
+    // v0.3.0: speechSynthesis unlock. On iOS Safari, the first utterance after
+    // a page load must happen inside a user-gesture handler (same rule as
+    // AudioContext). Firing a silent empty utterance from the Start-session
+    // button "primes" the engine for the rest of the session. After this, we
+    // can call speak() freely.
+    let speechUnlocked = false;
+    function ensureSpeech() {
+      if (speechUnlocked) return;
+      if (!('speechSynthesis' in window)) return;
+      try {
+        const u = new SpeechSynthesisUtterance('');
+        u.volume = 0;     // belt-and-braces: silent even if the empty string isn't
+        u.rate = 1;
+        window.speechSynthesis.speak(u);
+        speechUnlocked = true;
+      } catch (e) {
+        // Non-fatal; speak() will just no-op until something else unlocks.
+      }
+    }
+
+    // v0.3.0: primary user-facing feedback. Called from:
+    //   - onReadyInWaitingState / onReadyFromIdle  → speak "ready"
+    //   - onShapeHeard                              → speak the shape word
+    //   - showResult                                → speak the verdict
+    // speechSynthesis.cancel() is called first because iOS Safari queues
+    // utterances silently and can stall for seconds if you let the queue pile
+    // up. We always want the most recent thing to be said immediately.
+    function speak(text) {
+      if (!('speechSynthesis' in window)) return;
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = 1.1;   // slightly snappier than default — these are short words
+        u.pitch = 1.0;
+        u.volume = 1.0;
+        window.speechSynthesis.speak(u);
+      } catch (e) {
+        // Silent failure — feedback is a convenience, not a correctness feature.
+        console.warn('[speak] failed:', e);
+      }
     }
 
     function playBeep() {
@@ -1071,11 +1138,15 @@
       // Fold into lastAnalysis if it exists, so "Save Raw Data" picks it up.
       if (lastAnalysis) lastAnalysis.shape = word;
       showShapeHeardPill(word);
-      // v0.2.3: audio confirmation — the golfer can't see the screen from
-      // 2m away in stance. Chime says "got it, logged."
-      playShapeChime();
-      // v0.2.4: persistent display inside the result panel (was previously
-      // hidden under the fullscreen panel).
+      // v0.3.0: TTS echoes the shape word back through earbuds. Replaces the
+      // v0.2.3 shape-chime — field testing showed the visual pill is
+      // unreadable outdoors, and a generic chime tells the golfer "something
+      // was heard" but not WHICH word, so they can't verify mishears on the
+      // fly. Speaking the word back gives instant verification: if you said
+      // "pull" and heard "pool" spoken back, you know to re-say it.
+      speak(word);
+      // v0.2.4: persistent display inside the result panel (still populated
+      // as a dev reference — TTS is the primary confirmation in v0.3.0).
       updateLastHeardDisplay(word);
       // Status-bar flash is kept, though it's mostly obscured by the panel
       // — still useful on very tall screens where the controls peek out.
@@ -1120,12 +1191,12 @@
 
     function onReadyInWaitingState() {
       // "ready" while the result panel is showing means: we're done reviewing,
-      // start the next swing. Dismiss the panel and go straight into countdown.
+      // start the next swing. Dismiss the panel and go straight into startSwing.
       // pendingShape (if any) was already captured in lastAnalysis.
       stopRecognition();
       listenIndicator.classList.remove('active');
       resultPanel.classList.remove('visible');
-      startCountdown();
+      startSwing();
     }
 
     function startRecognition() {
@@ -1151,7 +1222,7 @@
     function onVoiceReady() {
       stopRecognition();
       listenIndicator.classList.remove('active');
-      startCountdown();
+      startSwing();
     }
 
     function setVoiceToggleUI(on, disabled) {
@@ -1177,6 +1248,44 @@
     // ============================================================
     // Countdown / recording (from v0.1.6, with voice-pause hooks)
     // ============================================================
+
+    // v0.3.0: startSwing is the new entry point for "user said ready, begin the
+    // next swing." Replaces the v0.2.x countdown ceremony. Flow:
+    //   1. Speak "ready" (TTS echo — confirms to the golfer that the app heard)
+    //   2. Wait POST_READY_DELAY_MS (~1.5s) for the settle
+    //   3. Call beginRecording() — silent open of the 5s recording window
+    //
+    // The analysis pipeline is unchanged: motion-onset detection in
+    // analyze() still finds Address as the last frame before sustained hand
+    // motion, regardless of when within the window the golfer actually swings.
+    // So the exact start moment of recording is not a measurement anchor — the
+    // golfer swings at their own pace.
+    //
+    // startCountdown (below) is retained as dead code for reference / rollback.
+    function startSwing() {
+      ensureAudio();
+      stopRecognition();                  // don't listen during the swing
+      listenIndicator.classList.remove('active');
+      resultPanel.classList.remove('visible');
+      shapeHeardEl.classList.remove('visible');
+      if (shapeHeardTimer) { clearTimeout(shapeHeardTimer); shapeHeardTimer = null; }
+
+      appState = 'counting';              // reuse existing state — UI-wise equivalent
+      recordBtn.textContent = '…';
+      recordBtn.classList.add('counting');
+      recordBtn.disabled = true;
+      status.textContent = 'Get into your stance — recording opens shortly.';
+
+      speak('ready');                     // TTS echo — golfer hears "ready" back
+
+      // Short settle pause, then open the recording window silently.
+      if (readyDelayTimer) { clearTimeout(readyDelayTimer); readyDelayTimer = null; }
+      readyDelayTimer = setTimeout(() => {
+        readyDelayTimer = null;
+        if (appState !== 'counting') return;   // user cancelled somehow
+        beginRecording();
+      }, POST_READY_DELAY_MS);
+    }
 
     function startCountdown() {
       ensureAudio();
@@ -1215,7 +1324,13 @@
     }
 
     function beginRecording() {
-      playBeep();
+      // v0.3.0: no beep. The recording window opens silently after the TTS
+      // "ready" echo + settle pause. The red REC border + "Recording…" status
+      // are the cues; on the phone-at-2m setup the golfer isn't looking at
+      // the screen anyway, but the window-opens timing is predictable (~1.5s
+      // after TTS finishes) so the golfer internalizes the rhythm in a few
+      // swings. If field testing shows this is disorienting, re-introduce
+      // a single subtle tone here (single-oscillator per the design caution).
       frames = [];
       recordingStartTime = performance.now();
       beepTime = 0;
@@ -1635,6 +1750,16 @@
     }
 
     function showResult({ value, verdict, verdictClass, wristY, addressIdx, topIdx, impactIdx, finishIdx, diag, warnings }) {
+      // v0.3.0: speak the verdict FIRST, before any DOM work. iOS Safari TTS
+      // has ~100-300ms first-utterance latency; kicking it off early means
+      // the word lands as close to analysis-complete as possible. Verdict
+      // vocabulary is deliberately tiny (three words) so it's fast and
+      // instantly parseable on the range. Detail lives in the post-session
+      // review, not in the instant feedback.
+      if (verdictClass === 'good')       speak('in range');
+      else if (verdictClass === 'off')   speak('a little off');
+      else                               speak('no swing');  // covers 'error' and any unclassified
+
       resultValue.textContent = value;
       resultVerdict.textContent = verdict;
       resultVerdict.className = '';
@@ -1660,7 +1785,7 @@
       });
 
       lastAnalysis = {
-        version: '0.2.4',
+        version: '0.3.0',
         timestamp: new Date().toISOString(),
         value, verdict,
         shape: pendingShape,         // v0.2.1: populated later if user calls out a shape
@@ -1711,22 +1836,22 @@
     recordBtn.addEventListener('click', () => {
       ensureAudio();
       if (appState === 'idle') {
-        startCountdown();
+        startSwing();
       } else if (appState === 'waiting') {
         // same behavior as "Next Swing" — panel may be open
         resultPanel.classList.remove('visible');
-        startCountdown();
+        startSwing();
       } else if (appState === 'recording') {
         stopRecording();
       }
     });
 
     resultClose.addEventListener('click', () => {
-      // "Next Swing" — close panel and go straight into countdown, same as
+      // "Next Swing" — close panel and go straight into startSwing, same as
       // saying "ready" in the waiting state.
       resultPanel.classList.remove('visible');
       if (appState === 'waiting') {
-        startCountdown();
+        startSwing();
       } else if (appState === 'idle' && voiceEnabled) {
         startRecognition();
       }
