@@ -310,22 +310,26 @@
     #result-value.off   { color: var(--warn); }
     #result-value.error { color: var(--error); }
 
-    /* Plain-language comment line. Empty (zero height) when nothing to add. */
+    /* Plain-language comment line. Empty (zero height) when nothing to add.
+       v0.3.2 patch: sized for readability from ~1.5m away (user at address
+       position, phone on tripod 2–2.5m away — edge case but within reach). */
     #result-comment {
-      font-size: 17px;
+      font-size: clamp(24px, 5vw, 36px);
       font-weight: 500;
       color: var(--fg);
       min-height: 0;
       letter-spacing: 0.2px;
+      line-height: 1.25;
     }
     #result-comment.good  { color: var(--accent); }
     #result-comment.off   { color: var(--warn); }
     #result-comment.error { color: var(--error); }
     #result-comment:empty { display: none; }
 
-    /* Shape line. Small, dim, present only when a shape was called. */
+    /* Shape line. Present only when a shape was called. Smaller than comment
+       — TTS already spoke the word, visual is confirmation. */
     #result-shape {
-      font-size: 14px;
+      font-size: clamp(18px, 3.5vw, 26px);
       color: var(--dim);
       letter-spacing: 0.3px;
       margin-top: 4px;
