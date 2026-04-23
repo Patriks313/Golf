@@ -306,6 +306,17 @@
     #result-verdict.off { color: var(--warn); }
     #result-verdict.error { color: var(--error); }
 
+    /* v0.3.0 patch: tiny breadcrumb showing what TTS actually spoke, so we can
+       verify ear-vs-screen agreement during field testing. Disposable — remove
+       in v0.3.1 if TTS proves reliable. */
+    .spoken-line {
+      font-size: 11px;
+      color: var(--dim);
+      margin-top: 4px;
+      font-style: italic;
+      letter-spacing: 0.3px;
+    }
+
     #warnings {
       margin: 12px 0;
       padding: 10px 14px;
@@ -545,8 +556,8 @@
     </div>
 
     <div id="controls">
-      <div id="status">Tap Start, or say &ldquo;ready&rdquo;. You have 6 seconds to get into stance.</div>
-      <button id="record-btn" disabled>Start</button>
+      <div id="status">Tap <b>Start session</b> once, then say &ldquo;ready&rdquo; when you&rsquo;re at address.</div>
+      <button id="record-btn" disabled>Start session</button>
       <div id="voice-row">
         <label for="voice-toggle">Voice trigger (say &ldquo;ready&rdquo;)</label>
         <div id="voice-toggle" class="on" role="switch" aria-checked="true" tabindex="0"></div>
@@ -568,6 +579,7 @@
       <div id="result-label">Tempo Ratio</div>
       <div id="result-value">—</div>
       <div id="result-verdict"></div>
+      <div id="result-spoken" class="spoken-line"></div>
     </div>
 
     <div id="warnings"></div>
@@ -611,6 +623,26 @@
   <script>
     // ============================================================
     // Golf Coach v0.3.0
+    //
+    // v0.3.0 patch (April 23 2026, after first home-test):
+    //   + English voice forced on TTS: pickEnglishVoice() listens for
+    //     'voiceschanged' and caches a voice whose lang starts with "en-".
+    //     speak() sets utterance.lang = 'en-US' and applies the cached voice.
+    //     Fixes "very poor Swinglish" pronunciation on non-English-locale
+    //     phones (Swedish iPhone in field test).
+    //   + Shape-echo deduplication: iOS Safari with interimResults fires a
+    //     recognition event for both the interim AND final match. If both
+    //     contain the same shape word, onShapeHeard was calling speak() twice
+    //     ("pull … pull"). Now skips speak() when the matched word is already
+    //     pendingShape. UI updates remain idempotent.
+    //   + Button label state machine: initial label "Start session" (makes
+    //     the TTS-unlock tap obvious for first-time users); "Next Swing"
+    //     after the first swing completes; "Analyzing…" during the brief
+    //     analyze gap. Status text on load no longer mentions the removed
+    //     6-second countdown.
+    //   + Debug breadcrumb: #result-spoken under the verdict shows the exact
+    //     phrase passed to TTS, for ear-vs-screen cross-checking during
+    //     field tests. Disposable; remove when TTS proves reliable.
     //
     // Changes from v0.2.4:
     //   + TTS (speechSynthesis) is now the user-facing feedback layer.
@@ -702,6 +734,7 @@
     const resultPanel = document.getElementById('result-panel');
     const resultValue = document.getElementById('result-value');
     const resultVerdict = document.getElementById('result-verdict');
+    const resultSpoken = document.getElementById('result-spoken');  // v0.3.0 patch: TTS breadcrumb
     const warningsEl = document.getElementById('warnings');
     const diagnostics = document.getElementById('diagnostics');
     const chartCanvas = document.getElementById('chart-canvas');
@@ -807,11 +840,43 @@
     // speechSynthesis.cancel() is called first because iOS Safari queues
     // utterances silently and can stall for seconds if you let the queue pile
     // up. We always want the most recent thing to be said immediately.
+    //
+    // v0.3.0 patch: force an English voice. On phones set to non-English
+    // locales (e.g. Swedish), the default speechSynthesis voice tries to
+    // pronounce English words with a non-English accent — field-tested as
+    // "very poor Swinglish" on a Swedish-locale iPhone. Selecting an English
+    // voice explicitly fixes it.
+    //
+    // iOS Safari quirk: speechSynthesis.getVoices() returns [] until the
+    // voices have asynchronously loaded. The 'voiceschanged' event fires when
+    // they're ready. We cache the chosen voice at that point and re-use it.
+    let cachedEnglishVoice = null;
+    function pickEnglishVoice() {
+      if (!('speechSynthesis' in window)) return;
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices || voices.length === 0) return;
+      // Prefer en-US > en-GB > any en-*. Prefer non-"novelty" voices.
+      const en = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith('en'));
+      if (en.length === 0) { cachedEnglishVoice = null; return; }
+      const byLang = (code) => en.find(v => v.lang.toLowerCase() === code);
+      cachedEnglishVoice = byLang('en-us') || byLang('en-gb') || en[0];
+    }
+    if ('speechSynthesis' in window) {
+      // Some browsers populate voices synchronously; try once, then also wait for the event.
+      pickEnglishVoice();
+      window.speechSynthesis.onvoiceschanged = pickEnglishVoice;
+    }
+
     function speak(text) {
       if (!('speechSynthesis' in window)) return;
       try {
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
+        // Force English regardless of voice selection result, so the engine
+        // at least knows the phoneme language even if no specific voice matched.
+        u.lang = 'en-US';
+        if (!cachedEnglishVoice) pickEnglishVoice();   // lazy re-try
+        if (cachedEnglishVoice) u.voice = cachedEnglishVoice;
         u.rate = 1.1;   // slightly snappier than default — these are short words
         u.pitch = 1.0;
         u.volume = 1.0;
@@ -1134,6 +1199,14 @@
     }
 
     function onShapeHeard(word) {
+      // v0.3.0 patch: dedup the TTS echo. iOS Safari with interimResults
+      // fires recognition events for both interim AND final matches. If both
+      // contain the same shape word (common), onShapeHeard gets called twice
+      // and the user hears "pull … pull". We speak only when the word changes
+      // relative to what's already pending. The UI updates are idempotent, so
+      // running them on the second fire is harmless.
+      const isDuplicate = (word === pendingShape);
+
       pendingShape = word;
       // Fold into lastAnalysis if it exists, so "Save Raw Data" picks it up.
       if (lastAnalysis) lastAnalysis.shape = word;
@@ -1144,7 +1217,9 @@
       // was heard" but not WHICH word, so they can't verify mishears on the
       // fly. Speaking the word back gives instant verification: if you said
       // "pull" and heard "pool" spoken back, you know to re-say it.
-      speak(word);
+      if (!isDuplicate) {
+        speak(word);
+      }
       // v0.2.4: persistent display inside the result panel (still populated
       // as a dev reference — TTS is the primary confirmation in v0.3.0).
       updateLastHeardDisplay(word);
@@ -1361,7 +1436,9 @@
         recordingAutoStopTimer = null;
       }
       appState = 'idle';
-      recordBtn.textContent = 'Start';
+      // v0.3.0 patch: button shows "Analyzing" during the brief analyze gap,
+      // then showResult will flip it to "Next Swing" when the verdict is ready.
+      recordBtn.textContent = 'Analyzing…';
       recordBtn.classList.remove('recording');
       recIndicator.classList.remove('active');
       recBorder.classList.remove('active');
@@ -1756,14 +1833,19 @@
       // vocabulary is deliberately tiny (three words) so it's fast and
       // instantly parseable on the range. Detail lives in the post-session
       // review, not in the instant feedback.
-      if (verdictClass === 'good')       speak('in range');
-      else if (verdictClass === 'off')   speak('a little off');
-      else                               speak('no swing');  // covers 'error' and any unclassified
+      let spokenPhrase;
+      if (verdictClass === 'good')       spokenPhrase = 'in range';
+      else if (verdictClass === 'off')   spokenPhrase = 'a little off';
+      else                               spokenPhrase = 'no swing';  // covers 'error' and any unclassified
+      speak(spokenPhrase);
 
       resultValue.textContent = value;
       resultVerdict.textContent = verdict;
       resultVerdict.className = '';
       if (verdictClass) resultVerdict.classList.add(verdictClass);
+      // v0.3.0 patch: breadcrumb — shows what TTS was asked to speak so we
+      // can cross-check ear-vs-screen in field tests. Disposable after v0.3.1.
+      if (resultSpoken) resultSpoken.textContent = 'spoken: ' + spokenPhrase;
 
       if (warnings && warnings.length > 0) {
         warningsEl.innerHTML = warnings.map(w => `<div>⚠ ${w}</div>`).join('');
@@ -1807,6 +1889,12 @@
       // words OR "ready" to start the next swing. This is what makes the
       // session hands-free across multiple swings.
       appState = 'waiting';
+      // v0.3.0 patch: once the first swing has happened, the button is a
+      // "next swing" trigger, not a "start session" one. TTS is already
+      // unlocked (we just spoke a verdict) so taps are no longer required
+      // for correctness — but some users will still prefer tapping.
+      recordBtn.textContent = 'Next Swing';
+      recordBtn.disabled = false;
       if (voiceEnabled) {
         const hint = shapeEnabled
           ? 'Say the shape (pull, straight, …) or “ready” for next swing.'
