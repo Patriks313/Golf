@@ -646,23 +646,28 @@
     #start-session-btn:active { opacity: 0.8; }
 
     /* ----------------- End-session button (in-session) ---------- */
+    /* v0.3.1 patch: End-session button is fixed to the viewport (not inside
+       #video-container), which sidesteps any stacking-context issues created
+       by transformed video elements. Solid-ish red background so it's visible
+       against any video feed, not just dark backgrounds. */
     #end-session-btn {
-      position: absolute;
-      top: env(safe-area-inset-top, 16px);
+      position: fixed;
+      top: calc(env(safe-area-inset-top, 16px) + 12px);
       right: 16px;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
-      background: rgba(0, 0, 0, 0.55);
-      border: 1px solid rgba(217, 95, 67, 0.55);
+      padding: 8px 14px;
+      background: rgba(217, 95, 67, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.4);
       border-radius: 18px;
       font-size: 13px;
-      font-weight: 500;
-      color: var(--fg);
+      font-weight: 600;
+      color: #fff;
       cursor: pointer;
-      z-index: 5;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
     }
-    #end-session-btn:active { background: rgba(0, 0, 0, 0.8); }
+    #end-session-btn:active { background: rgba(217, 95, 67, 0.75); }
 
     /* End-session button takes the top-right slot that listen-indicator
        uses during session. Stack vertically if both are visible. */
@@ -748,9 +753,11 @@
       <div id="countdown-label">Get into your stance</div>
       <div id="shape-heard"></div>
       <div id="debug"></div>
-      <!-- v0.3.1: End session button, visible only in session mode -->
-      <div id="end-session-btn" role="button" tabindex="0">End session</div>
     </div>
+
+    <!-- v0.3.1: End session button, fixed to viewport (not inside video-container
+         so it can't get lost in any stacking context). -->
+    <div id="end-session-btn" role="button" tabindex="0">End session</div>
 
     <!-- v0.3.1: start screen — landing page, drill picker, toggles -->
     <div id="start-screen">
