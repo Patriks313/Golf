@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.3.1</title>
+  <title>Golf Coach — v0.3.2</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -283,38 +283,120 @@
 
     #result-panel.visible { display: flex; }
 
-    #result-header { text-align: center; margin-bottom: 16px; }
-
-    #result-label {
-      font-size: 12px;
-      color: var(--dim);
-      letter-spacing: 2px;
-      text-transform: uppercase;
-      margin-bottom: 8px;
+    /* v0.3.2: MAIN block — big number, optional comment, optional shape.
+       Centered vertically in the remaining space above the action buttons.
+       Uses flex to float to the middle when there's room on a tall phone. */
+    #result-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      gap: 12px;
+      padding: 20px 0;
     }
 
+    /* Headline ratio number. Big, tabular-nums so 3:1 and 3.1:1 don't jitter. */
     #result-value {
-      font-size: 56px;
+      font-size: 72px;
       font-weight: 700;
       line-height: 1;
-      margin-bottom: 8px;
       font-variant-numeric: tabular-nums;
+      color: var(--fg);
+      letter-spacing: -0.02em;
+    }
+    #result-value.good  { color: var(--accent); }
+    #result-value.off   { color: var(--warn); }
+    #result-value.error { color: var(--error); }
+
+    /* Plain-language comment line. Empty (zero height) when nothing to add. */
+    #result-comment {
+      font-size: 17px;
+      font-weight: 500;
+      color: var(--fg);
+      min-height: 0;
+      letter-spacing: 0.2px;
+    }
+    #result-comment.good  { color: var(--accent); }
+    #result-comment.off   { color: var(--warn); }
+    #result-comment.error { color: var(--error); }
+    #result-comment:empty { display: none; }
+
+    /* Shape line. Small, dim, present only when a shape was called. */
+    #result-shape {
+      font-size: 14px;
+      color: var(--dim);
+      letter-spacing: 0.3px;
+      margin-top: 4px;
+    }
+    #result-shape:empty { display: none; }
+
+    /* v0.3.2: ACTIONS — stacked. Next Swing primary, End session secondary. */
+    #result-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 16px;
     }
 
-    #result-verdict { font-size: 16px; color: var(--fg); }
-    #result-verdict.good { color: var(--accent); }
-    #result-verdict.off { color: var(--warn); }
-    #result-verdict.error { color: var(--error); }
+    #result-close, #result-end {
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      border-radius: 10px;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+    }
 
-    /* v0.3.0 patch: tiny breadcrumb showing what TTS actually spoke, so we can
-       verify ear-vs-screen agreement during field testing. Disposable — remove
-       in v0.3.1 if TTS proves reliable. */
-    .spoken-line {
-      font-size: 11px;
+    #result-close {
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      color: var(--bg);
+    }
+
+    #result-end {
+      background: transparent;
+      border: 1px solid rgba(217, 95, 67, 0.7);
+      color: var(--error);
+    }
+
+    #result-close:active, #result-end:active { opacity: 0.75; }
+
+    /* v0.3.2: DEV LINKS — small underlined text, centered, quiet. */
+    #result-dev-links {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      font-size: 12px;
       color: var(--dim);
-      margin-top: 4px;
-      font-style: italic;
-      letter-spacing: 0.3px;
+    }
+    #result-dev-links a {
+      color: var(--dim);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    #result-dev-links a:active { opacity: 0.6; }
+    #result-dev-links .dev-link-sep { opacity: 0.6; }
+
+    /* v0.3.2: DEBUG block — hidden by default. */
+    #result-debug {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px dashed rgba(138, 135, 120, 0.25);
+    }
+    #result-debug.hidden { display: none; }
+
+    /* Internal verdict string shown inside the debug view so devs can still
+       see the raw v0.2.x-era string (e.g. "Backswing too fast") before it
+       was routed through the v0.3.2 comment map. */
+    #result-verdict-debug {
+      font-size: 12px;
+      color: var(--dim);
+      font-family: 'SF Mono', monospace;
+      margin-bottom: 10px;
     }
 
     #warnings {
@@ -436,51 +518,10 @@
       margin-right: 6px;
     }
 
-    /* v0.3.1: result panel actions now stack vertically — Next Swing alone
-       on top (primary, full width), secondary row below (Save Raw Data + End
-       session, side-by-side). End session gets a red-outlined "danger" style
-       so the destructive action is visually distinct without being loud
-       enough to tap by accident. The confirm dialog is the safety net. */
-    #result-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      margin-top: auto;
-    }
-
-    #result-actions-secondary {
-      display: flex;
-      gap: 10px;
-    }
-
-    #result-close, #result-save, #result-end {
-      padding: 12px;
-      font-size: 14px;
-      font-weight: 600;
-      border: 1px solid var(--fg);
-      border-radius: 10px;
-      background: transparent;
-      color: var(--fg);
-      cursor: pointer;
-      letter-spacing: 0.5px;
-    }
-
-    #result-close {
-      padding: 14px;
-      font-size: 15px;
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--bg);
-    }
-
-    #result-save, #result-end { flex: 1; }
-
-    #result-end {
-      border-color: rgba(217, 95, 67, 0.7);
-      color: var(--error);
-    }
-
-    #result-close:active, #result-save:active, #result-end:active { opacity: 0.75; }
+    /* v0.3.1 CSS for #result-actions removed — v0.3.2 replacement is
+       defined above with the main panel styles. Save raw data is now a
+       text link (not a button), and End session stacks directly below
+       Next Swing (no secondary side-by-side row anymore). */
 
     #loading {
       position: fixed;
@@ -808,43 +849,57 @@
   </div>
 
   <div id="result-panel">
-    <div id="result-header">
-      <div id="result-label">Tempo Ratio</div>
-      <div id="result-value">—</div>
-      <div id="result-verdict"></div>
-      <div id="result-spoken" class="spoken-line"></div>
-    </div>
-
-    <div id="warnings"></div>
-
-    <div id="chart-section">
-      <div id="chart-title">Wrist Height Over Time</div>
-      <canvas id="chart-canvas"></canvas>
-      <div id="chart-legend">
-        <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
-        <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
-        <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
-        <div class="legend-item"><div class="legend-dot" style="background: var(--finish)"></div>Finish</div>
-      </div>
-    </div>
-
-    <div id="diagnostics"></div>
-
-    <div id="last-heard-row">
-      <span class="lh-label">Last heard:</span>
-      <span class="lh-value" id="last-heard-value">—</span>
-    </div>
-
-    <div id="transcript-debug">
-      <div class="td-label">Recent transcripts (debug)</div>
-      <div class="td-list" id="transcript-list"></div>
+    <!-- v0.3.2: MAIN (always visible). Headline number, comment, shape,
+         action buttons. Built for the golfer, not the developer. -->
+    <div id="result-main">
+      <div id="result-value">—</div>          <!-- big headline ratio or N/A -->
+      <div id="result-comment"></div>          <!-- plain-language reason; empty when nothing to add -->
+      <div id="result-shape"></div>            <!-- "Shape: pull" when shape called; else empty -->
     </div>
 
     <div id="result-actions">
       <button id="result-close">Next Swing</button>
-      <div id="result-actions-secondary">
-        <button id="result-save">Save Raw Data</button>
-        <button id="result-end">End session</button>
+      <button id="result-end">End session</button>
+    </div>
+
+    <!-- v0.3.2: DEV LINKS. Two small underlined text links. -->
+    <div id="result-dev-links">
+      <a id="result-debug-toggle" href="#" role="button">Show debug</a>
+      <span class="dev-link-sep">·</span>
+      <a id="result-save-link" href="#" role="button">Save raw data</a>
+    </div>
+
+    <!-- v0.3.2: DEBUG (hidden by default). All the v0.3.1-era dev content
+         lives in here. Show debug toggles visibility. Chart is re-drawn
+         every time showResult runs so the content is always current when
+         revealed. -->
+    <div id="result-debug" class="hidden">
+      <!-- Keeping the old internal verdict string accessible for debug. -->
+      <div id="result-verdict-debug"></div>
+
+      <div id="warnings"></div>
+
+      <div id="chart-section">
+        <div id="chart-title">Wrist Height Over Time</div>
+        <canvas id="chart-canvas"></canvas>
+        <div id="chart-legend">
+          <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
+          <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
+          <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
+          <div class="legend-item"><div class="legend-dot" style="background: var(--finish)"></div>Finish</div>
+        </div>
+      </div>
+
+      <div id="diagnostics"></div>
+
+      <div id="last-heard-row">
+        <span class="lh-label">Last heard:</span>
+        <span class="lh-value" id="last-heard-value">—</span>
+      </div>
+
+      <div id="transcript-debug">
+        <div class="td-label">Recent transcripts (debug)</div>
+        <div class="td-list" id="transcript-list"></div>
       </div>
     </div>
   </div>
@@ -858,7 +913,40 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.3.1
+    // Golf Coach v0.3.2
+    //
+    // Changes from v0.3.1:
+    //   + Result panel redesigned from dev-era diagnostic view into a
+    //     golfer-facing screen. Big centered ratio number is the headline;
+    //     short comment line adds the specific reason where useful (e.g.
+    //     "Backswing too fast"); shape line appears below when a shape
+    //     was called.
+    //   + Chart, diagnostics, warnings, transcript debug, and Save raw
+    //     data are hidden behind a "Show debug" text link at the bottom of
+    //     the panel. One tap to reveal. Preserves dev tooling without
+    //     showing it to the golfer every swing.
+    //   + "Save raw data" moved from its own button to a text link beside
+    //     "Show debug" (two small dev-only links, centered, underneath the
+    //     action buttons).
+    //   + v0.3.0 "spoken:" breadcrumb under the verdict removed — TTS is
+    //     now field-validated as working, the breadcrumb has served its
+    //     purpose.
+    //   + Error verdict strings rephrased into plain-language comment
+    //     text. Internal verdict vocabulary is unchanged; the comment row
+    //     passes through a small translation map.
+    //   + Next Swing / End session buttons restack: Next Swing on top
+    //     (primary green, full width), End session below (secondary,
+    //     red-outlined, full width). Save raw data is no longer a button.
+    //
+    // Scope discipline — explicitly NOT in v0.3.2:
+    //   - No session review across swings (v0.3.3)
+    //   - No IndexedDB persistence (v0.3.4)
+    //   - No changes to start screen, TTS loop, or analysis pipeline
+    //
+    // See v0_3_2_design.md for full layout and content rules.
+    //
+    // ============================================================
+    // Golf Coach v0.3.1 (kept for reference — behavior below still applies)
     //
     // Changes from v0.3.0:
     //   + New start screen with drill picker + voice/shape toggles. The
@@ -1005,14 +1093,20 @@
     const loadingLabel = document.getElementById('loading-label');
     const resultPanel = document.getElementById('result-panel');
     const resultValue = document.getElementById('result-value');
-    const resultVerdict = document.getElementById('result-verdict');
-    const resultSpoken = document.getElementById('result-spoken');  // v0.3.0 patch: TTS breadcrumb
+    // v0.3.2: new main-panel elements
+    const resultComment = document.getElementById('result-comment');
+    const resultShape = document.getElementById('result-shape');
+    // v0.3.2: debug block (hidden by default) and its internal verdict string
+    const resultDebug = document.getElementById('result-debug');
+    const resultVerdictDebug = document.getElementById('result-verdict-debug');
+    const resultDebugToggle = document.getElementById('result-debug-toggle');
+    const resultSaveLink = document.getElementById('result-save-link');
+    // Elements now living inside the debug block (present, just hidden)
     const warningsEl = document.getElementById('warnings');
     const diagnostics = document.getElementById('diagnostics');
     const chartCanvas = document.getElementById('chart-canvas');
     const chartCtx = chartCanvas.getContext('2d');
     const resultClose = document.getElementById('result-close');
-    const resultSave = document.getElementById('result-save');
     const errorPanel = document.getElementById('error-panel');
     const errorMessage = document.getElementById('error-message');
     const debug = document.getElementById('debug');
@@ -1028,7 +1122,7 @@
     const appRoot = document.getElementById('app');
     const startScreen = document.getElementById('start-screen');
     const startSessionBtn = document.getElementById('start-session-btn');
-    const endSessionBtn = document.getElementById('result-end');  // v0.3.1 patch: moved to result panel
+    const endSessionBtn = document.getElementById('result-end');  // v0.3.1 patch: on result panel
     const drillTile = document.getElementById('drill-tile');
     const confirmOverlay = document.getElementById('confirm-overlay');
     const confirmCancelBtn = document.getElementById('confirm-cancel');
@@ -1546,6 +1640,11 @@
       // v0.2.4: persistent display inside the result panel (still populated
       // as a dev reference — TTS is the primary confirmation in v0.3.0).
       updateLastHeardDisplay(word);
+      // v0.3.2: live update the main-panel shape line so it mirrors what was
+      // just said. onShapeHeard can fire while the panel is already showing
+      // (user saw the swing result, then calls the shape). resultShape is
+      // cleared at the start of each new showResult, so this can't leak.
+      if (resultShape) resultShape.textContent = word ? ('Shape: ' + word) : '';
       // Status-bar flash is kept, though it's mostly obscured by the panel
       // — still useful on very tall screens where the controls peek out.
       flashStatusShapeHeard(word);
@@ -2149,6 +2248,33 @@
       }
     }
 
+    // v0.3.2: translate internal verdict strings (originating in analyze()
+    // and preserved in the raw JSON record) into golfer-facing comment text.
+    // Rule: additive only. For `good`, return '' — TTS already said "in
+    // range" and the headline shows the ratio. For `off` and `error`,
+    // return a plain-language reason that adds specific info the spoken
+    // word didn't carry.
+    const VERDICT_COMMENT_MAP = {
+      // 'off' verdicts — specific shape of the miss
+      'Backswing too fast':   'Backswing too fast',
+      'Downswing too slow':   'Downswing too slow',
+      'A little off 3:1':     'A little off 3:1',
+      // 'error' verdicts — friendlier plain-language rewrite
+      'Incomplete swing':     'Couldn’t detect a complete swing',
+      'No swing detected':    'Couldn’t detect a swing',
+      'Too short':            'Recording was too short',
+      'Recording too short':  'Recording was too short',
+      'Detection failed':     'Couldn’t read the swing',
+      'No pose detected':     'Couldn’t see the golfer'
+    };
+    function commentForVerdict(verdictClass, verdict) {
+      if (verdictClass === 'good') return '';
+      if (VERDICT_COMMENT_MAP[verdict]) return VERDICT_COMMENT_MAP[verdict];
+      // Unknown verdict string for the error/off class — pass through as-is.
+      // Better than a blank row when something unexpected happened.
+      return verdict || '';
+    }
+
     function showResult({ value, verdict, verdictClass, wristY, addressIdx, topIdx, impactIdx, finishIdx, diag, warnings }) {
       // v0.3.0: speak the verdict FIRST, before any DOM work. iOS Safari TTS
       // has ~100-300ms first-utterance latency; kicking it off early means
@@ -2162,13 +2288,33 @@
       else                               spokenPhrase = 'no swing';  // covers 'error' and any unclassified
       speak(spokenPhrase);
 
-      resultValue.textContent = value;
-      resultVerdict.textContent = verdict;
-      resultVerdict.className = '';
-      if (verdictClass) resultVerdict.classList.add(verdictClass);
-      // v0.3.0 patch: breadcrumb — shows what TTS was asked to speak so we
-      // can cross-check ear-vs-screen in field tests. Disposable after v0.3.1.
-      if (resultSpoken) resultSpoken.textContent = 'spoken: ' + spokenPhrase;
+      // v0.3.2: MAIN panel rendering.
+      // Headline: the tempo ratio, or "N/A" when there's nothing to show.
+      // The internal code already passes "—" for errors; we translate that
+      // to "N/A" to match what TTS says ("no swing" ≈ "not available").
+      resultValue.textContent = (value && value !== '—') ? value : 'N/A';
+      resultValue.className = '';
+      if (verdictClass) resultValue.classList.add(verdictClass);
+
+      // Comment row: plain-language reason, additive only — never repeats
+      // what TTS already spoke or what the headline already shows.
+      // Rule: good → empty; off/error → specific detail mapped from verdict.
+      resultComment.textContent = commentForVerdict(verdictClass, verdict);
+      resultComment.className = '';
+      if (verdictClass && resultComment.textContent) resultComment.classList.add(verdictClass);
+
+      // Shape row: present only when a shape was called this swing.
+      // pendingShape is reset at the start of each recording in beginRecording.
+      resultShape.textContent = pendingShape ? ('Shape: ' + pendingShape) : '';
+
+      // v0.3.2: reset the debug panel to hidden on every new result. If the
+      // user wants detail for this swing they tap "Show debug" again.
+      resultDebug.classList.add('hidden');
+      resultDebugToggle.textContent = 'Show debug';
+
+      // Populate debug content (hidden but kept up-to-date so one tap reveals
+      // the current swing's data, not a stale previous swing).
+      if (resultVerdictDebug) resultVerdictDebug.textContent = 'internal: ' + (verdict || '—');
 
       if (warnings && warnings.length > 0) {
         warningsEl.innerHTML = warnings.map(w => `<div>⚠ ${w}</div>`).join('');
@@ -2190,7 +2336,7 @@
       });
 
       lastAnalysis = {
-        version: '0.3.1',
+        version: '0.3.2',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -2278,7 +2424,34 @@
       }
     });
 
-    resultSave.addEventListener('click', saveRawData);
+    // v0.3.2: debug toggle on the result panel. Flips #result-debug
+    // visibility and toggles the link label. State resets to "hidden" on
+    // every new showResult call.
+    resultDebugToggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      const nowHidden = resultDebug.classList.toggle('hidden');
+      resultDebugToggle.textContent = nowHidden ? 'Show debug' : 'Hide debug';
+      // Re-draw the chart when revealing — the canvas uses getBoundingClientRect
+      // which returns 0×0 for a display:none element, so the initial render
+      // earlier may have produced an empty canvas.
+      if (!nowHidden && lastAnalysis) {
+        requestAnimationFrame(() => {
+          drawChart(
+            lastAnalysis.wristY,
+            lastAnalysis.addressIdx,
+            lastAnalysis.topIdx,
+            lastAnalysis.impactIdx,
+            lastAnalysis.finishIdx
+          );
+        });
+      }
+    });
+
+    // v0.3.2: save raw data is now a dev link, not a button.
+    resultSaveLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      saveRawData();
+    });
 
     voiceToggle.addEventListener('click', () => {
       ensureAudio();                       // v0.3.1: unlock audio on any start-screen interaction
