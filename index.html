@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.3.0</title>
+  <title>Golf Coach — v0.3.1</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -533,10 +533,205 @@
       font-family: 'SF Mono', monospace;
       pointer-events: none;
     }
+
+    /* ============================================================ */
+    /* v0.3.1: start-screen / session mode split                    */
+    /* ============================================================ */
+
+    /* Two top-level modes, controlled by a class on #app.           */
+    /* Default HTML has both sub-trees present; CSS hides whichever  */
+    /* mode isn't active. JS flips the class on #app.                */
+
+    #app.mode-start  #controls     { display: none; }
+    #app.mode-start  #start-screen { display: flex; }
+    #app.mode-session #controls     { display: flex; }
+    #app.mode-session #start-screen { display: none; }
+
+    /* End-session button appears only in session mode. */
+    #app.mode-start   #end-session-btn { display: none; }
+    #app.mode-session #end-session-btn { display: flex; }
+
+    /* ----------------- Start screen layout ---------------------- */
+    #start-screen {
+      padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
+      background: var(--bg);
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .start-section-label {
+      font-size: 12px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 2px;
+    }
+
+    /* Drill tile (selected state is the default; only one drill today) */
+    .drill-tile {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      background: rgba(155, 197, 61, 0.08);
+      border: 2px solid var(--accent);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .drill-tile:active { background: rgba(155, 197, 61, 0.18); }
+
+    .drill-tile-bullet {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .drill-tile-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .drill-tile-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+
+    .drill-tile-desc {
+      font-size: 12px;
+      color: var(--dim);
+    }
+
+    .drill-tile-placeholder {
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px dashed rgba(138, 135, 120, 0.35);
+      border-radius: 12px;
+      color: var(--dim);
+      font-size: 13px;
+      font-style: italic;
+      text-align: center;
+    }
+
+    /* Start-screen toggle rows — same visual as in-session but packed tighter */
+    .start-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 4px;
+    }
+    .start-toggle-row label {
+      font-size: 14px;
+      color: var(--fg);
+    }
+
+    /* Start CTA */
+    #start-session-btn {
+      margin-top: 4px;
+      padding: 14px 24px;
+      background: var(--accent);
+      color: #0f1712;
+      border: none;
+      border-radius: 12px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #start-session-btn:active { opacity: 0.8; }
+
+    /* ----------------- End-session button (in-session) ---------- */
+    #end-session-btn {
+      position: absolute;
+      top: env(safe-area-inset-top, 16px);
+      right: 16px;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.55);
+      border: 1px solid rgba(217, 95, 67, 0.55);
+      border-radius: 18px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--fg);
+      cursor: pointer;
+      z-index: 5;
+    }
+    #end-session-btn:active { background: rgba(0, 0, 0, 0.8); }
+
+    /* End-session button takes the top-right slot that listen-indicator
+       uses during session. Stack vertically if both are visible. */
+    #app.mode-session #listen-indicator {
+      top: calc(env(safe-area-inset-top, 16px) + 40px);
+    }
+
+    /* ----------------- Confirm dialog --------------------------- */
+    #confirm-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 20;
+    }
+    #confirm-overlay.visible { display: flex; }
+
+    #confirm-box {
+      background: var(--bg);
+      border: 1px solid rgba(138, 135, 120, 0.35);
+      border-radius: 14px;
+      padding: 22px 20px;
+      max-width: 300px;
+      width: calc(100% - 40px);
+      text-align: center;
+    }
+
+    #confirm-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--fg);
+    }
+
+    #confirm-body {
+      font-size: 14px;
+      color: var(--dim);
+      margin-bottom: 18px;
+    }
+
+    .confirm-btn-row {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .confirm-btn {
+      flex: 1;
+      padding: 10px 16px;
+      border-radius: 10px;
+      border: none;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .confirm-btn.cancel {
+      background: rgba(255,255,255,0.1);
+      color: var(--fg);
+    }
+    .confirm-btn.confirm {
+      background: var(--error);
+      color: #0f1712;
+    }
   </style>
 </head>
 <body>
-  <div id="app">
+  <div id="app" class="mode-start">
     <div id="video-container">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="overlay"></canvas>
@@ -553,18 +748,49 @@
       <div id="countdown-label">Get into your stance</div>
       <div id="shape-heard"></div>
       <div id="debug"></div>
+      <!-- v0.3.1: End session button, visible only in session mode -->
+      <div id="end-session-btn" role="button" tabindex="0">End session</div>
     </div>
 
-    <div id="controls">
-      <div id="status">Tap <b>Start session</b> once, then say &ldquo;ready&rdquo; when you&rsquo;re at address.</div>
-      <button id="record-btn" disabled>Start session</button>
-      <div id="voice-row">
+    <!-- v0.3.1: start screen — landing page, drill picker, toggles -->
+    <div id="start-screen">
+      <div class="start-section-label">Today's practice</div>
+      <div id="drill-tile" class="drill-tile" role="button" tabindex="0" aria-selected="true">
+        <div class="drill-tile-bullet"></div>
+        <div class="drill-tile-text">
+          <div class="drill-tile-title">Tempo</div>
+          <div class="drill-tile-desc">Backswing-to-downswing ratio (target ~3:1)</div>
+        </div>
+      </div>
+      <div class="drill-tile-placeholder">More drills coming soon</div>
+
+      <div class="start-section-label" style="margin-top: 6px;">Session settings</div>
+      <div class="start-toggle-row">
         <label for="voice-toggle">Voice trigger (say &ldquo;ready&rdquo;)</label>
         <div id="voice-toggle" class="on" role="switch" aria-checked="true" tabindex="0"></div>
       </div>
-      <div id="voice-row">
+      <div class="start-toggle-row">
         <label for="shape-toggle">Shape reporting (say &ldquo;pull&rdquo;, &ldquo;straight&rdquo;, &hellip;)</label>
         <div id="shape-toggle" role="switch" aria-checked="false" tabindex="0"></div>
+      </div>
+
+      <button id="start-session-btn" disabled>Start session</button>
+    </div>
+
+    <div id="controls">
+      <div id="status">Say &ldquo;ready&rdquo; when you&rsquo;re at address.</div>
+      <button id="record-btn" disabled>Next Swing</button>
+    </div>
+  </div>
+
+  <!-- v0.3.1: End-session confirmation dialog -->
+  <div id="confirm-overlay">
+    <div id="confirm-box">
+      <div id="confirm-title">End this session?</div>
+      <div id="confirm-body">Swing data from this session will be dropped. You can start a new session after.</div>
+      <div class="confirm-btn-row">
+        <button id="confirm-cancel" class="confirm-btn cancel">Cancel</button>
+        <button id="confirm-end" class="confirm-btn confirm">End session</button>
       </div>
     </div>
   </div>
@@ -622,7 +848,43 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.3.0
+    // Golf Coach v0.3.1
+    //
+    // Changes from v0.3.0:
+    //   + New start screen with drill picker + voice/shape toggles. The
+    //     app now has two top-level UI modes: "start" (landing page, drill
+    //     selection, toggle setup) and "session" (in-session, the v0.3.0
+    //     loop). Mode swap is a pure DOM class flip on #app; camera keeps
+    //     running across the flip.
+    //   + Drill picker: single Tempo tile with "more drills coming soon"
+    //     strip below. Future-ready for drill #2.
+    //   + Voice trigger and shape reporting toggles MOVED from in-session
+    //     controls to the start screen. Session config is captured once at
+    //     Start session and fixed for the duration of that session.
+    //   + New appState value: 'start' (before v0.3.0 the app implicitly
+    //     started in 'idle'; 'idle' now means "in session, between swings").
+    //   + "End session" button in top-right during session. Confirms with
+    //     a dialog, then returns to the start screen. Session data dropped
+    //     (session review is v0.3.3).
+    //   + Audio/TTS unlock now fires from any interactive control on the
+    //     start screen — tile, toggles, or Start button — not only from
+    //     the big button. Fixes the v0.3.0 corner case where a user who
+    //     never taps the record button had silent TTS.
+    //   + JSON record gains "drill" field (always "tempo" in v0.3.1).
+    //     Schema-stable slot for drill #2 and beyond.
+    //
+    // Scope discipline — explicitly NOT in v0.3.1:
+    //   - Per-swing result panel is unchanged (simplification is v0.3.2).
+    //   - No session review across swings (v0.3.3).
+    //   - No IndexedDB persistence (v0.3.4).
+    //   - No End-session "review now?" popup (waits for v0.3.3 review).
+    //   - No start-screen first-run hint (deferred).
+    //   - No drill persistence across sessions (deliberate — per spec).
+    //
+    // See golf_coach_app_brief_v3.md and v0_3_1_design.md for full context.
+    //
+    // ============================================================
+    // Golf Coach v0.3.0 (kept for reference — behavior below still applies)
     //
     // v0.3.0 patch (April 23 2026, after first home-test):
     //   + English voice forced on TTS: pickEnglishVoice() listens for
@@ -752,9 +1014,18 @@
     // v0.2.4
     const lastHeardValue = document.getElementById('last-heard-value');
     const transcriptList = document.getElementById('transcript-list');
+    // v0.3.1 additions
+    const appRoot = document.getElementById('app');
+    const startScreen = document.getElementById('start-screen');
+    const startSessionBtn = document.getElementById('start-session-btn');
+    const endSessionBtn = document.getElementById('end-session-btn');
+    const drillTile = document.getElementById('drill-tile');
+    const confirmOverlay = document.getElementById('confirm-overlay');
+    const confirmCancelBtn = document.getElementById('confirm-cancel');
+    const confirmEndBtn = document.getElementById('confirm-end');
 
     let pose = null;
-    let appState = 'idle';
+    let appState = 'start';   // v0.3.1: was 'idle'; 'idle' now means in-session between swings
     let frames = [];
     let recordingStartTime = 0;
     let beepTime = 0;
@@ -776,6 +1047,48 @@
     let recordingAutoStopTimer = null;
     let shapeHeardTimer = null;
     let pendingShape = null;          // shape captured for the most recent swing
+
+    // v0.3.1: per-session config, captured at Start session and fixed for the
+    // duration of the session. Dropped on End session. Not persisted — the
+    // start page is identical every time, per design spec Group C #8/#9.
+    let sessionConfig = null;
+
+    // v0.3.1: mode-flip helpers. Camera keeps running across the flip —
+    // we don't stop/restart the pose pump or getUserMedia stream, just
+    // swap which DOM sub-tree is visible via a class on #app.
+    function enterStartMode() {
+      appState = 'start';
+      appRoot.classList.remove('mode-session');
+      appRoot.classList.add('mode-start');
+      // Hide any in-session overlays that might linger.
+      resultPanel.classList.remove('visible');
+      recIndicator.classList.remove('active');
+      recBorder.classList.remove('active');
+      listenIndicator.classList.remove('active');
+      shapeHeardEl.classList.remove('visible');
+      confirmOverlay.classList.remove('visible');
+      // Kill any pending timers so a background recording/countdown can't
+      // leak into a fresh session.
+      if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+      if (readyDelayTimer) { clearTimeout(readyDelayTimer); readyDelayTimer = null; }
+      if (recordingAutoStopTimer) { clearTimeout(recordingAutoStopTimer); recordingAutoStopTimer = null; }
+      if (shapeHeardTimer) { clearTimeout(shapeHeardTimer); shapeHeardTimer = null; }
+      // Stop speech recognition — start screen doesn't listen.
+      stopRecognition();
+    }
+
+    function enterSessionMode() {
+      appState = 'idle';
+      appRoot.classList.remove('mode-start');
+      appRoot.classList.add('mode-session');
+      recordBtn.textContent = 'Next Swing';
+      recordBtn.disabled = false;
+      status.textContent = voiceEnabled
+        ? 'Say “ready” when you’re at address.'
+        : 'Tap Next Swing when you’re ready.';
+      // If voice trigger is on, start recognition listening for "ready".
+      if (voiceEnabled) startRecognition();
+    }
 
     function showError(title, message) {
       errorPanel.querySelector('#error-title').textContent = title;
@@ -1867,13 +2180,17 @@
       });
 
       lastAnalysis = {
-        version: '0.3.0',
+        version: '0.3.1',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
         // records can be migrated without a schema change. See brief section
         // "User tracking and accounts — deliberate v0.x non-goal."
         userId: 'local',
+        // v0.3.1: drill field from sessionConfig. Defaults to 'tempo' if for
+        // any reason sessionConfig is missing (shouldn't happen; belt-and-
+        // braces). Schema-stable slot for drill #2+.
+        drill: (sessionConfig && sessionConfig.drill) || 'tempo',
         timestamp: new Date().toISOString(),
         value, verdict,
         shape: pendingShape,         // v0.2.1: populated later if user calls out a shape
@@ -1954,6 +2271,7 @@
     resultSave.addEventListener('click', saveRawData);
 
     voiceToggle.addEventListener('click', () => {
+      ensureAudio();                       // v0.3.1: unlock audio on any start-screen interaction
       if (!voiceSupported) return;
       if (voiceEnabled) disableVoice();
       else enableVoice();
@@ -1964,12 +2282,67 @@
 
     // v0.2.1: shape toggle — purely local state, affects onresult routing.
     shapeToggle.addEventListener('click', () => {
+      ensureAudio();                       // v0.3.1: unlock audio on any start-screen interaction
       shapeEnabled = !shapeEnabled;
       shapeToggle.classList.toggle('on', shapeEnabled);
       shapeToggle.setAttribute('aria-checked', shapeEnabled ? 'true' : 'false');
     });
     shapeToggle.addEventListener('keydown', (e) => {
       if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); shapeToggle.click(); }
+    });
+
+    // ============================================================
+    // v0.3.1: start-screen handlers
+    // ============================================================
+
+    // Drill tile — only one drill today, so tapping is a no-op for selection
+    // (Tempo stays selected). The tap still runs ensureAudio() to unlock TTS
+    // early, per Group E #11. When drill #2 ships, this becomes a real select.
+    drillTile.addEventListener('click', () => {
+      ensureAudio();
+      // Future: flip a .selected class between multiple drill tiles here.
+    });
+    drillTile.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); drillTile.click(); }
+    });
+
+    // Start session — builds sessionConfig from current toggle state and
+    // flips into session mode. voiceEnabled/shapeEnabled are already being
+    // kept in sync with the toggles by their own handlers, so we just
+    // snapshot them here. Per spec (Group C #9), nothing is persisted.
+    startSessionBtn.addEventListener('click', () => {
+      ensureAudio();
+      sessionConfig = {
+        drill: 'tempo',                  // future: derived from selected drill tile
+        voiceEnabled: voiceEnabled,
+        shapeEnabled: shapeEnabled,
+        startedAt: Date.now()
+      };
+      enterSessionMode();
+    });
+
+    // End session — show confirm dialog. Confirm dismisses to start screen;
+    // cancel keeps the session alive. Plumbed this way so a v0.3.3 "Review
+    // now?" popup can be inserted between confirm and the mode flip without
+    // rewiring anything (Group B #7).
+    endSessionBtn.addEventListener('click', () => {
+      confirmOverlay.classList.add('visible');
+    });
+    endSessionBtn.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); endSessionBtn.click(); }
+    });
+
+    confirmCancelBtn.addEventListener('click', () => {
+      confirmOverlay.classList.remove('visible');
+    });
+
+    confirmEndBtn.addEventListener('click', () => {
+      confirmOverlay.classList.remove('visible');
+      // Drop in-memory session data. No persistence (IndexedDB is v0.3.4).
+      sessionConfig = null;
+      lastAnalysis = null;
+      pendingShape = null;
+      enterStartMode();
     });
 
     (async function boot() {
@@ -1981,13 +2354,16 @@
         pump();
         setupRecognition();
         loading.classList.add('hidden');
-        recordBtn.disabled = false;
-        if (voiceSupported) {
-          status.textContent = 'Tap Start or say “ready”. You have 6 seconds to get into stance.';
-          startRecognition();
-        } else {
+        // v0.3.1: we boot into start mode (not session). Enable the Start
+        // session CTA; the in-session record button stays disabled until
+        // enterSessionMode() runs. Speech recognition is NOT started here —
+        // the start screen doesn't listen. Recognition starts on
+        // enterSessionMode() if voiceEnabled is true.
+        startSessionBtn.disabled = false;
+        if (!voiceSupported) {
+          // Reflect inability to use voice: show voice toggle as off+disabled
           setVoiceToggleUI(false, true);
-          status.textContent = 'Voice not supported. Tap Start. You have 6 seconds to get into stance.';
+          voiceEnabled = false;
         }
       } catch (e) {
         console.error(e);
