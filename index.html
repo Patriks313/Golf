@@ -326,13 +326,16 @@
     #result-comment.error { color: var(--error); }
     #result-comment:empty { display: none; }
 
-    /* Shape line. Present only when a shape was called. Smaller than comment
-       — TTS already spoke the word, visual is confirmation. */
+    /* Shape line. Present only when a shape was called. Same size as the
+       comment line — at 1m+ the previous smaller size was hard to read, and
+       the shape is legitimately useful info (a mishear is the whole reason
+       we echo it, and the golfer wants to verify visually when they can). */
     #result-shape {
-      font-size: clamp(18px, 3.5vw, 26px);
+      font-size: clamp(24px, 5vw, 36px);
       color: var(--dim);
       letter-spacing: 0.3px;
       margin-top: 4px;
+      line-height: 1.25;
     }
     #result-shape:empty { display: none; }
 
