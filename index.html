@@ -821,7 +821,7 @@
       margin-top: 10px;
     }
 
-    #review-export-btn, #review-discard-btn {
+    #review-export-btn, #review-export-raw-btn, #review-discard-btn {
       padding: 14px;
       font-size: 15px;
       font-weight: 600;
@@ -830,7 +830,7 @@
       cursor: pointer;
     }
 
-    #review-export-btn {
+    #review-export-btn, #review-export-raw-btn {
       background: transparent;
       border: 1px solid var(--fg);
       color: var(--fg);
@@ -842,7 +842,7 @@
       color: var(--error);
     }
 
-    #review-export-btn:active, #review-discard-btn:active { opacity: 0.75; }
+    #review-export-btn:active, #review-export-raw-btn:active, #review-discard-btn:active { opacity: 0.75; }
 
     /* ----------------- End-session button (in-session) ---------- */
     /* v0.3.1 patch: End session was briefly a floating top-right button,
@@ -962,6 +962,7 @@
 
       <div class="review-actions">
         <button id="review-export-btn">Download session CSV</button>
+        <button id="review-export-raw-btn">Download raw data (JSON)</button>
         <button id="review-discard-btn">Discard and end</button>
       </div>
     </div>
@@ -986,11 +987,10 @@
       <button id="result-end">End session</button>
     </div>
 
-    <!-- v0.3.2: DEV LINKS. Two small underlined text links. -->
+    <!-- v0.3.3.1: per-swing "Save raw data" link removed. Session-wide
+         JSON dump on the review screen supersedes it. -->
     <div id="result-dev-links">
       <a id="result-debug-toggle" href="#" role="button">Show debug</a>
-      <span class="dev-link-sep">·</span>
-      <a id="result-save-link" href="#" role="button">Save raw data</a>
     </div>
 
     <!-- v0.3.2: DEBUG (hidden by default). All the v0.3.1-era dev content
@@ -1037,7 +1037,33 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.3.3
+    // Golf Coach v0.3.3.1
+    //
+    // Changes from v0.3.3:
+    //   + Session-wide raw JSON dump. New "Download raw data (JSON)" button
+    //     on the review screen, beside "Download session CSV". Single file,
+    //     all swings from the session, including per-frame landmarks (nose,
+    //     shoulders, wrists, hips) needed for offline drill analysis.
+    //   + sessionSwings entries now retain the per-swing `frames` array
+    //     (previously stripped as premature optimization — a 20-swing
+    //     session is ~500KB, comfortably within phone memory).
+    //   + Per-swing "Save raw data" text link on the result panel REMOVED.
+    //     The session-wide dump supersedes it; different purpose would be
+    //     clutter with no clear benefit. If per-swing debug access is ever
+    //     needed again, download the session JSON and grep.
+    //
+    // Purpose: enables the data-first empirical loop for v0.4.x drill
+    // development. Each new drill (head stability first) is validated
+    // against real-session JSON before thresholds are locked or code
+    // is written. See head_stability_algorithm_sketch.md §6.
+    //
+    // Scope discipline — explicitly NOT in v0.3.3.1:
+    //   - No change to CSV format (still summary only, one row per swing)
+    //   - No change to capture pipeline, analysis, TTS, or any drill logic
+    //   - No IndexedDB persistence (still v0.4+ territory)
+    //
+    // ============================================================
+    // Golf Coach v0.3.3 (kept for reference — behavior below still applies)
     //
     // Changes from v0.3.2:
     //   + Session review screen. End session no longer goes directly back
@@ -1255,7 +1281,7 @@
     const resultDebug = document.getElementById('result-debug');
     const resultVerdictDebug = document.getElementById('result-verdict-debug');
     const resultDebugToggle = document.getElementById('result-debug-toggle');
-    const resultSaveLink = document.getElementById('result-save-link');
+    // v0.3.3.1: resultSaveLink removed (per-swing save link dropped).
     // Elements now living inside the debug block (present, just hidden)
     const warningsEl = document.getElementById('warnings');
     const diagnostics = document.getElementById('diagnostics');
@@ -1291,6 +1317,7 @@
     const reviewDistSection = document.getElementById('review-dist-section');
     const reviewEmptyState = document.getElementById('review-empty-state');
     const reviewExportBtn = document.getElementById('review-export-btn');
+    const reviewExportRawBtn = document.getElementById('review-export-raw-btn');
     const reviewDiscardBtn = document.getElementById('review-discard-btn');
 
     let pose = null;
@@ -1637,6 +1664,65 @@
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }
+
+    // v0.3.3.1: session-wide raw JSON dump. One file per session, all
+    // swings, full per-frame landmarks. Consumed by offline scripts for
+    // drill-algorithm development (head stability first).
+    //
+    // Structure mirrors the per-swing lastAnalysis schema so tools that
+    // parse one work on the other:
+    //   { version, sessionStartedAt, sessionEndedAt, sessionConfig,
+    //     swings: [ { swingNumber, timestamp, drill, verdict, verdictClass,
+    //                 value, ratio, backswingMs, downswingMs, shape,
+    //                 addressIdx, topIdx, impactIdx, finishIdx,
+    //                 wristY, frames: [...] }, ... ] }
+    function exportSessionRawJSON() {
+      if (sessionSwings.length === 0) return;
+      const payload = {
+        version: '0.3.3.1',
+        sessionStartedAt: sessionConfig && sessionConfig.startedAt
+          ? new Date(sessionConfig.startedAt).toISOString()
+          : null,
+        sessionEndedAt: new Date().toISOString(),
+        sessionConfig: sessionConfig
+          ? {
+              drill: sessionConfig.drill,
+              voiceEnabled: sessionConfig.voiceEnabled,
+              shapeEnabled: sessionConfig.shapeEnabled
+            }
+          : null,
+        swings: sessionSwings.map((s, i) => ({
+          swingNumber: i + 1,
+          timestamp: s.timestamp || null,
+          drill: s.drill || null,
+          verdict: s.verdict || null,
+          verdictClass: s.verdictClass || null,
+          value: s.value != null ? s.value : null,
+          ratio: (s.ratio != null && isFinite(s.ratio)) ? s.ratio : null,
+          backswingMs: s.backswingMs != null ? s.backswingMs : null,
+          downswingMs: s.downswingMs != null ? s.downswingMs : null,
+          shape: s.shape || null,
+          addressIdx: s.addressIdx != null ? s.addressIdx : null,
+          topIdx: s.topIdx != null ? s.topIdx : null,
+          impactIdx: s.impactIdx != null ? s.impactIdx : null,
+          finishIdx: s.finishIdx != null ? s.finishIdx : null,
+          wristY: s.wristY || null,
+          frames: s.frames || []
+        }))
+      };
+      const json = JSON.stringify(payload, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `session-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
     function csvEscape(v) {
       const s = String(v);
       if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
@@ -2833,10 +2919,16 @@
         }))
       };
 
+      // v0.3.3.1: sessionSwings now retains the per-swing `frames` array
+      // alongside the summary fields. Previously stripped for memory
+      // (comment below), but a 20-swing session is ~500KB — comfortably
+      // fine. Keeping frames lets the session-wide raw JSON dump on the
+      // review screen include everything needed for offline drill analysis
+      // (nose + shoulder trajectories for head stability, etc.).
+      //
       // v0.3.3: push a lightweight copy into sessionSwings for the review
-      // screen. NO `frames` array (too large, not needed for review/CSV).
-      // NO full `wristY` for non-complete swings, but we keep it for
-      // complete ones because the average-shape chart needs it.
+      // screen. NO full `wristY` for non-complete swings, but we keep it
+      // for complete ones because the average-shape chart needs it.
       const isComplete =
         typeof addressIdx === 'number' &&
         typeof finishIdx === 'number' &&
@@ -2846,12 +2938,17 @@
         timestamp: lastAnalysis.timestamp,
         drill: lastAnalysis.drill,
         verdict, verdictClass,
+        value,   // v0.3.3.1: keep the raw value too (e.g. "2.8:1") for JSON
         ratio: (typeof ratioNum === 'number' && isFinite(ratioNum)) ? ratioNum : null,
         backswingMs: (typeof backswingMs === 'number' && backswingMs > 0) ? backswingMs : null,
         downswingMs: (typeof downswingMs === 'number' && downswingMs > 0) ? downswingMs : null,
         shape: pendingShape,
         addressIdx, topIdx, impactIdx, finishIdx,
-        wristY: isComplete ? wristY.slice() : null
+        wristY: isComplete ? wristY.slice() : null,
+        // v0.3.3.1: per-frame landmarks. Same shape as lastAnalysis.frames
+        // so downstream analysis code works on either single-swing or
+        // session-wide JSON without branching.
+        frames: lastAnalysis.frames
       });
 
       // v0.2.1: enter the 'waiting' state — recognition listens for shape
@@ -2937,11 +3034,9 @@
       }
     });
 
-    // v0.3.2: save raw data is now a dev link, not a button.
-    resultSaveLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      saveRawData();
-    });
+    // v0.3.3.1: per-swing "Save raw data" listener removed. The link
+    // itself is gone from the DOM; session-wide JSON dump on the review
+    // screen supersedes it.
 
     voiceToggle.addEventListener('click', () => {
       ensureAudio();                       // v0.3.1: unlock audio on any start-screen interaction
@@ -3006,6 +3101,12 @@
     // v0.3.3: review screen buttons
     reviewExportBtn.addEventListener('click', () => {
       exportSessionCSV();
+    });
+
+    // v0.3.3.1: session-wide raw JSON dump (per-frame landmarks for all
+    // swings). Enables offline drill-algorithm analysis.
+    reviewExportRawBtn.addEventListener('click', () => {
+      exportSessionRawJSON();
     });
 
     reviewDiscardBtn.addEventListener('click', () => {
