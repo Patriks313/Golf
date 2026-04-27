@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1</title>
+  <title>Golf Coach — v0.4.1.2</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -305,6 +305,19 @@
       font-variant-numeric: tabular-nums;
       color: var(--fg);
       letter-spacing: -0.02em;
+    }
+    /* v0.4.1.2: multi-line headlines (e.g. head stability's two gate-rows)
+       need a smaller font and preserved whitespace for column alignment.
+       Set when the value text contains a newline. Monospace-like alignment
+       via tabular-nums + a fixed-pitch font keeps the columns lined up. */
+    #result-value.multi-line {
+      font-size: clamp(20px, 5vw, 28px);
+      font-weight: 600;
+      line-height: 1.35;
+      letter-spacing: 0.4px;
+      white-space: pre;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      text-align: left;
     }
     #result-value.good  { color: var(--accent); }
     #result-value.off,
@@ -1060,6 +1073,61 @@
 
   <script>
     // ============================================================
+    // Golf Coach v0.4.1.2
+    //
+    // Head-stability redesign — the v0.4.1 ship was algorithmically right
+    // but the panel display didn't match what golfers actually want to
+    // see. v0.4.1.2 changes WHAT we report, not HOW we measure.
+    //
+    //   + GATE-BASED REPORTING. Result panel now shows two rows:
+    //         Top    V: down 2  H: forward 2
+    //         Impact V: down 2  H: forward 4
+    //     Each row is one of the two key gate-points (P4 = top of
+    //     backswing, P7 = impact). The reading is signed displacement
+    //     from the address (P1) reference, expressed in plain words:
+    //     vertical "up"/"down"/"same", horizontal "forward"/"back"/"same".
+    //     "Same" is used when |displacement| < 1 inch (we don't trust
+    //     sub-inch numbers given calibration uncertainty).
+    //
+    //   + SPOKEN PHRASE = IMPACT ONLY. "Vertical down 2, horizontal
+    //     forward 4." Not both gates — too much info on the range.
+    //     Speech is now drill-supplied (spokenPhraseOverride) rather
+    //     than a static class→word map, because it depends on the
+    //     analysis output (signed numbers) not just verdict class.
+    //
+    //   + VERDICT DRIVEN BY IMPACT, NOT FULL-SWING PEAK. Coaches care
+    //     about head position at the moment of strike — backswing sway
+    //     that doesn't carry into impact isn't a defect. Rule: if either
+    //     impact-axis displacement exceeds IMPACT_OFF_INCHES (default 4″),
+    //     verdict is 'off'. Otherwise 'good'. Kept as a top-of-block
+    //     constant so we can tune it from field data.
+    //
+    //   + RIGHT-HANDED VOCABULARY hardcoded for now. "Forward" = head
+    //     toward target (lead side). "Back" = head away from target
+    //     (trail side). Lefties get the opposite words (works correctly
+    //     in terms of the underlying signs, just sounds wrong in words).
+    //     Per-user handedness setting is a future polish item.
+    //
+    //   + Multi-line CSS class added for #result-value to fit two rows
+    //     of gate readings at a smaller, monospace-aligned size. Single-
+    //     line headlines (tempo's "3:1") unchanged.
+    //
+    // What does NOT change:
+    //   - The math (algorithm, calibration, smoothing) — same as v0.4.1.
+    //     Per-frame nose displacement in inches via shoulder-width scale.
+    //     We just stopped reporting the full-swing peak as the headline.
+    //   - Tempo unchanged — still uses "on/below/above" + ratio headline.
+    //   - JSON dump format unchanged. Per-gate displacements still in
+    //     extras (now under p4LateralIn/p4VerticalIn etc., as before).
+    //   - CSV gains an `impact_worse_axis_in` column; existing per-gate
+    //     and full-swing-peak columns preserved.
+    //
+    // Tunables (top of DRILLS.head_stability):
+    //   IMPACT_OFF_INCHES = 4       (verdict edge — adjust from data)
+    //   ROUND_TO_SAME_INCHES = 1    (sub-inch rounding to "same")
+    //   ASSUMED_SHOULDER_INCHES = 16  (per-user calibration → v0.4.1.x)
+    //
+    // ============================================================
     // Golf Coach v0.4.1
     //
     // Two changes from v0.4.0:
@@ -1716,13 +1784,40 @@
       description: 'Did the head stay still through the swing?',
       supportedAngles: ['faceOn'],
 
+      // ---------- Tunable parameters ----------------------------------
+      // These are kept top-of-block so we can adjust them as field data
+      // accumulates without hunting through the analyze function.
+      //
+      //   IMPACT_OFF_INCHES — if EITHER axis at impact (P7) exceeds this
+      //                       in absolute value, the verdict is 'off'.
+      //                       Otherwise 'good'. We start at 4″ based on
+      //                       the April 27 13:00 CEST session — normal
+      //                       swings clustered around 5″ COMBINED PEAK
+      //                       across the FULL swing window, but the
+      //                       impact-only number is typically smaller
+      //                       (head returns toward setup before/at impact).
+      //                       Adjust as we learn what's actually achievable.
+      //
+      //   ROUND_TO_SAME_INCHES — magnitudes below this round to "same" in
+      //                          both the panel display and the spoken
+      //                          phrase. Smaller than measurement noise +
+      //                          calibration uncertainty (we don't trust
+      //                          sub-inch numbers anyway).
+      //
+      //   ASSUMED_SHOULDER_INCHES — physical scale reference. Per-user
+      //                             calibration is the planned v0.4.1.x
+      //                             upgrade.
+      IMPACT_OFF_INCHES: 4,
+      ROUND_TO_SAME_INCHES: 1,
+      ASSUMED_SHOULDER_INCHES: 16.0,
+      // ----------------------------------------------------------------
+
       verdictCommentMap: {
-        // Two flavors of good — same class, different comment text.
-        'Very still':           '',
-        'Steady':               '',
-        // Two flavors of off — same class, different comment text.
-        'Head moved':           'Head moved during the swing',
-        'Head moved a lot':     'Head moved a lot during the swing',
+        // 'good' / 'off' verdicts — the panel comment line is intentionally
+        // brief here because the headline already carries the four-number
+        // breakdown that's the core message.
+        'Steady':         '',
+        'Head moved':     'Head moved during the swing',
         // Errors — same as tempo's plumbing-level errors.
         'Incomplete swing':     'Couldn’t detect a complete swing',
         'No swing detected':    'Couldn’t detect a swing',
@@ -1732,12 +1827,13 @@
         'No pose detected':     'Couldn’t see the golfer'
       },
 
-      // Spoken vocabulary kept tight. Two good-class flavors collapse to
-      // one spoken word ("steady"). Two off-class flavors also collapse to
-      // one ("moved"). The result-panel comment text differentiates if the
-      // user looks at the screen.
+      // The spoken phrase is generated dynamically inside analyze() because
+      // it depends on the impact direction and magnitude, not just the
+      // verdict class. So spokenForClass is left empty/fallback; the actual
+      // speech is set via result.spokenPhraseOverride below.
+      // (showResult prefers result.spokenPhraseOverride if present.)
       spokenForClass: {
-        good:  'steady',
+        good:  'steady',   // fallback only — analyze sets a richer phrase
         off:   'moved',
         error: 'no swing'
       },
@@ -1747,6 +1843,10 @@
                 tAddress, beepTime, fps, totalMs, clippedDurationMs,
                 warnings } = ctx;
 
+        const ASSUMED_SHOULDER_INCHES = this.ASSUMED_SHOULDER_INCHES;
+        const IMPACT_OFF_INCHES = this.IMPACT_OFF_INCHES;
+        const ROUND_TO_SAME_INCHES = this.ROUND_TO_SAME_INCHES;
+
         // Helper: median of an array (assumes non-empty)
         const median = arr => {
           const sorted = arr.slice().sort((a, b) => a - b);
@@ -1755,9 +1855,6 @@
         };
 
         // ---- Shoulder-width scale ----
-        // Window of ~11 frames centered on addressIdx. Robust to single-frame
-        // occlusions via median.
-        const ASSUMED_SHOULDER_INCHES = 16.0;
         const winLo = Math.max(0, addressIdx - 5);
         const winHi = Math.min(frames.length, addressIdx + 6);
         const shoulderPxs = [];
@@ -1780,23 +1877,17 @@
         const pxToIn = ASSUMED_SHOULDER_INCHES / shoulderPxRef;
 
         // ---- Smoothed nose traces ----
-        // Reuses the plumbing-level smooth() helper. Filter null landmarks
-        // not expected for nose (visibility was 1.000 in all clean field
-        // sessions); a defensive fallback uses raw 0.5 if visibility is
-        // unexpectedly low.
         const noseXRaw = frames.map(f => f.landmarks[LM.NOSE].x);
         const noseYRaw = frames.map(f => f.landmarks[LM.NOSE].y);
         const noseX = smooth(noseXRaw, 5);
         const noseY = smooth(noseYRaw, 5);
 
-        // ---- Reference position at P1 (single frame, smoothed) ----
+        // ---- Reference position at P1 (single frame, post-smoothing) ----
         const refX = noseX[addressIdx];
         const refY = noseY[addressIdx];
 
-        // ---- Per-frame displacements through the swing window ----
-        // dx in inches, + = toward target (lead side). dy in inches, +
-        // = head rose (we negate the image-coord delta because image-y
-        // increases downward).
+        // ---- Per-frame displacements through the full swing window ----
+        // Kept for CSV/JSON; not driving verdict in the new design.
         let peakLateral = 0;
         let peakLateralSigned = 0;
         let peakVertical = 0;
@@ -1809,77 +1900,112 @@
         }
         const combinedPeak = Math.max(peakLateral, peakVertical);
 
-        // ---- Per-gate readings (P1, P4, P7, P10) ----
-        // Stored in extras for JSON/CSV analysis. P1 is always (0,0) by
-        // definition. v0.4.1 panel shows peaks only.
+        // ---- Per-gate readings (P4, P7, P10) ----
+        // P1 is the reference, always (0, 0). Sign convention:
+        //   +dx = head moved TOWARD target (= "forward" in the new vocab).
+        //   −dx = head moved AWAY from target (= "back").
+        //   +dy = head ROSE.
+        //   −dy = head DROPPED ("down").
         const gateAt = (idx) => ({
           dx: (noseX[idx] - refX) * pxToIn,
           dy: -(noseY[idx] - refY) * pxToIn
         });
-        const p1 = gateAt(addressIdx);
         const p4 = gateAt(topIdx);
         const p7 = gateAt(impactIdx);
         const p10 = gateAt(finishIdx);
 
         // ---- Verdict classification ----
-        // Bands locked from April 27 13:00 CEST session. Edges are
-        // soft — see brief Open Questions for "lock thresholds when more
-        // testers use the app."
+        // Driven by impact (P7) only. Either axis above IMPACT_OFF_INCHES
+        // → 'off'. The Top reading (P4) is shown but doesn't drive verdict
+        // — coaches care about head position at the moment of strike.
+        const impactWorseAxis = Math.max(Math.abs(p7.dx), Math.abs(p7.dy));
         let verdict, verdictClass;
-        if (combinedPeak < 2)      { verdict = 'Very still';        verdictClass = 'good'; }
-        else if (combinedPeak < 6) { verdict = 'Steady';            verdictClass = 'good'; }
-        else if (combinedPeak < 9) { verdict = 'Head moved';        verdictClass = 'off'; }
-        else                       { verdict = 'Head moved a lot';  verdictClass = 'off'; }
+        if (impactWorseAxis > IMPACT_OFF_INCHES) {
+          verdict = 'Head moved';
+          verdictClass = 'off';
+        } else {
+          verdict = 'Steady';
+          verdictClass = 'good';
+        }
 
-        // ---- Result value (panel headline) ----
-        // Two numbers, signed for direction. Format chosen to fit the existing
-        // headline CSS (clamp(64px, 20vw, 128px)) which is sized for a single
-        // word/number — two short numbers separated by a center dot fits.
-        const value =
-          `${peakLateralSigned >= 0 ? '+' : '−'}${peakLateral.toFixed(1)}″`
-          + ' · '
-          + `${peakVerticalSigned >= 0 ? '+' : '−'}${peakVertical.toFixed(1)}″`;
-        // Note: the dot+space looks cleaner than a slash on small screens.
-        // Sign convention: + lateral = toward target, − lateral = away.
-        // + vertical = head rose, − vertical = head dropped.
+        // ---- Direction-word helpers (right-handed, "forward"/"back") ----
+        // Magnitudes below ROUND_TO_SAME_INCHES collapse to "same" — we
+        // don't trust sub-1-inch numbers given calibration uncertainty.
+        const horizontalWord = (signed) => {
+          if (Math.abs(signed) < ROUND_TO_SAME_INCHES) return 'same';
+          // Right-handed convention: + dx = head moved toward target = forward.
+          //                          − dx = head moved away from target = back.
+          return signed > 0 ? 'forward' : 'back';
+        };
+        const verticalWord = (signed) => {
+          if (Math.abs(signed) < ROUND_TO_SAME_INCHES) return 'same';
+          return signed > 0 ? 'up' : 'down';
+        };
+        const formatGate = (g) => {
+          const v = verticalWord(g.dy);
+          const h = horizontalWord(g.dx);
+          const vMag = (v === 'same') ? '' : ` ${Math.abs(g.dy).toFixed(0)}`;
+          const hMag = (h === 'same') ? '' : ` ${Math.abs(g.dx).toFixed(0)}`;
+          // "V: down 2  H: forward 4" — for the panel.
+          return `V: ${v}${vMag}  H: ${h}${hMag}`;
+        };
+
+        // ---- Result value (panel headline, two lines) ----
+        // Uses a newline; the result-value CSS gets a v0.4.1 update to
+        // accommodate multi-line content with smaller text.
+        const value = `Top    ${formatGate(p4)}\nImpact ${formatGate(p7)}`;
+
+        // ---- Spoken phrase (impact only) ----
+        const spokenV = verticalWord(p7.dy);
+        const spokenH = horizontalWord(p7.dx);
+        const spokenVPart = (spokenV === 'same')
+          ? 'vertical same'
+          : `vertical ${spokenV} ${Math.abs(p7.dy).toFixed(0)}`;
+        const spokenHPart = (spokenH === 'same')
+          ? 'horizontal same'
+          : `horizontal ${spokenH} ${Math.abs(p7.dx).toFixed(0)}`;
+        const spokenPhraseOverride = `${spokenVPart}, ${spokenHPart}`;
 
         const diag = [
           ['Frames captured', frames.length],
           ['Recording duration', `${(totalMs/1000).toFixed(2)} s`],
           ['Effective FPS', fps.toFixed(1)],
           ['Beep → motion onset', `${(tAddress - beepTime).toFixed(0)} ms`],
-          ['Address (P1)', `frame ${addressIdx}`],
+          ['Address (P1)', `frame ${addressIdx} (reference)`],
           ['Top (P4)', `frame ${topIdx}`],
           ['Impact (P7)', `frame ${impactIdx}`],
           ['Finish (P10)', `frame ${finishIdx}`],
           ['Shoulder width (px)', shoulderPxRef.toFixed(4)],
           ['Scale', `${pxToIn.toFixed(1)} px/in`],
-          ['Lateral peak', `${peakLateralSigned >= 0 ? '+' : '−'}${peakLateral.toFixed(2)} in`],
-          ['Vertical peak', `${peakVerticalSigned >= 0 ? '+' : '−'}${peakVertical.toFixed(2)} in`],
-          ['Combined peak', `${combinedPeak.toFixed(2)} in`],
           ['P4 lat / vert', `${p4.dx.toFixed(2)} / ${p4.dy.toFixed(2)} in`],
           ['P7 lat / vert', `${p7.dx.toFixed(2)} / ${p7.dy.toFixed(2)} in`],
-          ['P10 lat / vert', `${p10.dx.toFixed(2)} / ${p10.dy.toFixed(2)} in`]
+          ['P10 lat / vert', `${p10.dx.toFixed(2)} / ${p10.dy.toFixed(2)} in`],
+          ['Lateral peak (full swing)', `${peakLateralSigned >= 0 ? '+' : '−'}${peakLateral.toFixed(2)} in`],
+          ['Vertical peak (full swing)', `${peakVerticalSigned >= 0 ? '+' : '−'}${peakVertical.toFixed(2)} in`],
+          ['Impact worse axis', `${impactWorseAxis.toFixed(2)} in (off threshold ${IMPACT_OFF_INCHES})`]
         ];
 
         return {
           value,
           verdict,
           verdictClass,
+          spokenPhraseOverride,    // showResult prefers this over spokenForClass[verdictClass]
           diag,
           warnings,
           extra: {
-            // Peaks (used for verdict + most CSV/distribution).
+            // Per-gate signed inches — primary data for verdict + display.
+            p4LateralIn: p4.dx,  p4VerticalIn: p4.dy,
+            p7LateralIn: p7.dx,  p7VerticalIn: p7.dy,
+            p10LateralIn: p10.dx, p10VerticalIn: p10.dy,
+            // Impact "worse axis" magnitude — drives verdict. Useful for
+            // the review screen distribution chart and CSV.
+            impactWorseAxisIn: impactWorseAxis,
+            // Full-swing peaks — kept for offline analysis. Not displayed.
             lateralPeakIn: peakLateral,
             verticalPeakIn: peakVertical,
             lateralPeakSignedIn: peakLateralSigned,
             verticalPeakSignedIn: peakVerticalSigned,
             combinedPeakIn: combinedPeak,
-            // Per-gate readings (for offline analysis / future panel display).
-            // P1 is always (0,0) so we don't store it.
-            p4LateralIn: p4.dx,  p4VerticalIn: p4.dy,
-            p7LateralIn: p7.dx,  p7VerticalIn: p7.dy,
-            p10LateralIn: p10.dx, p10VerticalIn: p10.dy,
             // Calibration trace.
             shoulderPxRef: shoulderPxRef,
             assumedShoulderInches: ASSUMED_SHOULDER_INCHES
@@ -1887,15 +2013,9 @@
         };
       },
 
-      // CSV: peak fields are the everyday "what happened this swing" view.
-      // Per-gate fields included for offline analysis.
+      // CSV: per-gate as the primary view, plus impact worse-axis (drives
+      // the verdict) and full-swing peaks (offline analysis).
       csvColumns: [
-        { name: 'lateral_peak_in',
-          get: s => s.lateralPeakSignedIn != null ? s.lateralPeakSignedIn.toFixed(2) : '' },
-        { name: 'vertical_peak_in',
-          get: s => s.verticalPeakSignedIn != null ? s.verticalPeakSignedIn.toFixed(2) : '' },
-        { name: 'combined_peak_in',
-          get: s => s.combinedPeakIn != null ? s.combinedPeakIn.toFixed(2) : '' },
         { name: 'p4_lateral_in',
           get: s => s.p4LateralIn != null ? s.p4LateralIn.toFixed(2) : '' },
         { name: 'p4_vertical_in',
@@ -1908,42 +2028,57 @@
           get: s => s.p10LateralIn != null ? s.p10LateralIn.toFixed(2) : '' },
         { name: 'p10_vertical_in',
           get: s => s.p10VerticalIn != null ? s.p10VerticalIn.toFixed(2) : '' },
+        { name: 'impact_worse_axis_in',
+          get: s => s.impactWorseAxisIn != null ? s.impactWorseAxisIn.toFixed(2) : '' },
+        { name: 'lateral_peak_in',
+          get: s => s.lateralPeakSignedIn != null ? s.lateralPeakSignedIn.toFixed(2) : '' },
+        { name: 'vertical_peak_in',
+          get: s => s.verticalPeakSignedIn != null ? s.verticalPeakSignedIn.toFixed(2) : '' },
         { name: 'shoulder_px_ref',
           get: s => s.shoulderPxRef != null ? s.shoulderPxRef.toFixed(4) : '' }
       ],
 
       reviewSummary: function(swings) {
-        const withPeak = swings.filter(s => typeof s.combinedPeakIn === 'number' && isFinite(s.combinedPeakIn));
-        if (withPeak.length === 0) return '';
-        const peaks = withPeak.map(s => s.combinedPeakIn).sort((a, b) => a - b);
-        const median = peaks.length % 2 === 0
-          ? (peaks[peaks.length/2 - 1] + peaks[peaks.length/2]) / 2
-          : peaks[(peaks.length - 1) / 2];
-        return `median peak ${median.toFixed(1)}″`;
+        // Median of impact-worse-axis across the session — the "how
+        // typical was your head position at impact" stat.
+        const withImpact = swings.filter(s => typeof s.impactWorseAxisIn === 'number' && isFinite(s.impactWorseAxisIn));
+        if (withImpact.length === 0) return '';
+        const vals = withImpact.map(s => s.impactWorseAxisIn).sort((a, b) => a - b);
+        const m = vals.length;
+        const med = m % 2 === 0 ? (vals[m/2 - 1] + vals[m/2]) / 2 : vals[(m-1)/2];
+        return `median impact ${med.toFixed(1)}″`;
       },
 
+      // Per-swing review table: Top + Impact gate readings, in plain words.
       tableColumns: [
-        { label: 'Lat',
-          get: s => s.lateralPeakSignedIn != null
-                    ? ((s.lateralPeakSignedIn >= 0 ? '+' : '−') + Math.abs(s.lateralPeakSignedIn).toFixed(1) + '″')
-                    : '—' },
-        { label: 'Vert',
-          get: s => s.verticalPeakSignedIn != null
-                    ? ((s.verticalPeakSignedIn >= 0 ? '+' : '−') + Math.abs(s.verticalPeakSignedIn).toFixed(1) + '″')
-                    : '—' },
-        { label: 'Peak',
-          get: s => s.combinedPeakIn != null ? (s.combinedPeakIn.toFixed(1) + '″') : '—' }
+        { label: 'Top',
+          get: s => {
+            if (s.p4LateralIn == null) return '—';
+            const h = Math.abs(s.p4LateralIn) < 1 ? 'same' : (s.p4LateralIn > 0 ? `fwd ${Math.abs(s.p4LateralIn).toFixed(0)}` : `back ${Math.abs(s.p4LateralIn).toFixed(0)}`);
+            const v = Math.abs(s.p4VerticalIn) < 1 ? 'same' : (s.p4VerticalIn > 0 ? `up ${Math.abs(s.p4VerticalIn).toFixed(0)}` : `down ${Math.abs(s.p4VerticalIn).toFixed(0)}`);
+            return `${v}/${h}`;
+          } },
+        { label: 'Impact',
+          get: s => {
+            if (s.p7LateralIn == null) return '—';
+            const h = Math.abs(s.p7LateralIn) < 1 ? 'same' : (s.p7LateralIn > 0 ? `fwd ${Math.abs(s.p7LateralIn).toFixed(0)}` : `back ${Math.abs(s.p7LateralIn).toFixed(0)}`);
+            const v = Math.abs(s.p7VerticalIn) < 1 ? 'same' : (s.p7VerticalIn > 0 ? `up ${Math.abs(s.p7VerticalIn).toFixed(0)}` : `down ${Math.abs(s.p7VerticalIn).toFixed(0)}`);
+            return `${v}/${h}`;
+          } }
       ],
 
-      // Distribution buckets in inches. Bucket edges align with verdict
-      // edges so the chart visually agrees with the per-swing coloring.
+      // Distribution buckets driven by impact-worse-axis (the verdict
+      // metric). Buckets edge at the off threshold (4″) so the chart
+      // visually agrees with verdict coloring; finer-grained "good"
+      // buckets help the user see whether they're settling around 1–2″
+      // or clustering at 3–4″ (close to the edge).
       distributionBuckets: [
-        { label: '<1″',    test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn < 1,                                    cls: 'good' },
-        { label: '1–2″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 1 && s.combinedPeakIn < 2,          cls: 'good' },
-        { label: '2–4″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 2 && s.combinedPeakIn < 4,          cls: 'good' },
-        { label: '4–6″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 4 && s.combinedPeakIn < 6,          cls: 'good' },
-        { label: '6–9″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 6 && s.combinedPeakIn < 9,          cls: 'off' },
-        { label: '≥9″',    test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 9,                                   cls: 'off' }
+        { label: '<1″',   test: s => typeof s.impactWorseAxisIn === 'number' && s.impactWorseAxisIn < 1,                                       cls: 'good' },
+        { label: '1–2″',  test: s => typeof s.impactWorseAxisIn === 'number' && s.impactWorseAxisIn >= 1 && s.impactWorseAxisIn < 2,           cls: 'good' },
+        { label: '2–3″',  test: s => typeof s.impactWorseAxisIn === 'number' && s.impactWorseAxisIn >= 2 && s.impactWorseAxisIn < 3,           cls: 'good' },
+        { label: '3–4″',  test: s => typeof s.impactWorseAxisIn === 'number' && s.impactWorseAxisIn >= 3 && s.impactWorseAxisIn < 4,           cls: 'good' },
+        { label: '4–6″',  test: s => typeof s.impactWorseAxisIn === 'number' && s.impactWorseAxisIn >= 4 && s.impactWorseAxisIn < 6,           cls: 'off' },
+        { label: '≥6″',   test: s => typeof s.impactWorseAxisIn === 'number' && s.impactWorseAxisIn >= 6,                                      cls: 'off' }
       ]
     };
 
@@ -2398,7 +2533,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1',
+        version: '0.4.1.2',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3358,7 +3493,12 @@
         // ratio/backswingMs/downswingMs). showResult passes them into the
         // sessionSwings record verbatim so the review screen / CSV / JSON
         // can read them without knowing which drill.
-        extra: result.extra || {}
+        extra: result.extra || {},
+        // v0.4.1.2: drills can provide a fully-formed spoken phrase that
+        // depends on the analysis output (not just verdict class). Head
+        // stability uses this for "vertical down 2, horizontal forward 4".
+        // showResult prefers this over spokenForClass[verdictClass].
+        spokenPhraseOverride: result.spokenPhraseOverride
       });
     }
 
@@ -3455,18 +3595,29 @@
       // v0.4.0: drill-specific extras (e.g. tempo provides
       // {ratio, backswingMs, downswingMs}). Stored verbatim into the
       // sessionSwings record. May be undefined on early-exit error paths.
-      extra
+      extra,
+      // v0.4.1.2: drill-supplied spoken phrase. Preferred over
+      // spokenForClass[verdictClass] when present. Used by head stability
+      // to speak "vertical down 2, horizontal forward 4" (computed from
+      // impact-gate displacements, not from a static verdict-class map).
+      spokenPhraseOverride
     }) {
       const drill = getCurrentDrill();
-      // v0.4.0: speak the verdict FIRST, before any DOM work. iOS Safari TTS
-      // has ~100-300ms first-utterance latency; kicking it off early means
-      // the word lands as close to analysis-complete as possible. Spoken
-      // phrase is drill-defined — tempo says "in range / a little off /
-      // no swing"; head stability will say different words.
-      const spokenForClass = (drill && drill.spokenForClass) || {
-        good: 'on', below: 'below', above: 'above', off: 'a little off', error: 'no swing'
-      };
-      const spokenPhrase = spokenForClass[verdictClass] || spokenForClass.error;
+      // v0.4.0/0.4.1.2: speak the verdict FIRST, before any DOM work. iOS
+      // Safari TTS has ~100-300ms first-utterance latency; kicking it off
+      // early means the word lands as close to analysis-complete as
+      // possible. Drills can either provide a spokenPhraseOverride (richer,
+      // computed from analysis output) or rely on the static
+      // spokenForClass[verdictClass] map.
+      let spokenPhrase;
+      if (spokenPhraseOverride) {
+        spokenPhrase = spokenPhraseOverride;
+      } else {
+        const spokenForClass = (drill && drill.spokenForClass) || {
+          good: 'on', below: 'below', above: 'above', off: 'a little off', error: 'no swing'
+        };
+        spokenPhrase = spokenForClass[verdictClass] || spokenForClass.error;
+      }
       speak(spokenPhrase);
 
       // v0.3.2 / v0.4.0: MAIN panel rendering.
@@ -3475,6 +3626,12 @@
       // we translate that to "N/A" to match what TTS says.
       resultValue.textContent = (value && value !== '—') ? value : 'N/A';
       resultValue.className = '';
+      // v0.4.1.2: detect multi-line headline (e.g. head stability's
+      // "Top ... \n Impact ...") and apply a different size/style. Single-
+      // line headlines (tempo's "3:1") keep the original big-number look.
+      if (value && value.indexOf('\n') !== -1) {
+        resultValue.classList.add('multi-line');
+      }
       if (verdictClass) resultValue.classList.add(verdictClass);
 
       // Comment row: drill provides the verdict→comment map. Plumbing rule:
@@ -3521,7 +3678,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1',
+        version: '0.4.1.2',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
