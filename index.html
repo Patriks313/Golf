@@ -1037,7 +1037,55 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.3.3.3
+    // Golf Coach v0.4.0
+    //
+    // Architectural release — no new user-facing functionality. Tempo still
+    // works exactly as before. The internal code is reshaped to make the
+    // plumbing/drill split explicit, so adding drill #2 (head stability,
+    // v0.4.1) is cheap.
+    //
+    // Changes from v0.3.3.3:
+    //   + DRILL REGISTRY. New `DRILLS` object holds per-drill config:
+    //     id, displayName, supportedAngles, analyze(), verdict speech map,
+    //     comment map, headline format, distribution buckets, CSV columns,
+    //     review-summary stat, table columns. Tempo logic lifted from
+    //     scattered locations across the file into DRILLS.tempo.
+    //   + cameraAngle is a first-class plumbing concept. sessionConfig
+    //     gains a `cameraAngle` field (default 'faceOn'). Drills declare
+    //     `supportedAngles: ['faceOn']` etc. CSV gains `camera_angle`
+    //     column. No new UI in v0.4.0 — picker still has one drill, one
+    //     angle. The wiring is in place so v0.4.x can add down-the-line
+    //     drills without touching every drill module.
+    //   + analyze() refactored: runs the shared swing segmenter, then
+    //     dispatches to currentDrill.analyze(...). The segmenter produces
+    //     the canonical {addressIdx, topIdx, impactIdx, finishIdx} contract
+    //     every drill consumes.
+    //   + showResult() is now drill-agnostic: takes a generic result object
+    //     produced by the drill, renders it. Per-drill speech, comments,
+    //     diag rows, and per-swing-record extras all come from the drill.
+    //   + CSV and review screen read drill metadata for column lists,
+    //     distribution-chart buckets, summary-stat rendering, and table
+    //     columns.
+    //   + Dead code removed: COUNTDOWN_SECONDS, playBeep, playShapeChime,
+    //     startCountdown, saveRawData. All unused since v0.3.x.
+    //
+    // What does NOT change:
+    //   - All existing tempo behavior (capture, segmentation, ratio, verdicts,
+    //     comments, charts, CSV columns) is identical to v0.3.3.3 from a
+    //     user perspective.
+    //   - Capture pipeline, TTS, voice, hands-free loop unchanged.
+    //   - JSON dump format unchanged (drill-agnostic already).
+    //   - Head-stability drill is NOT in this release. v0.4.1 adds it as
+    //     the first real test of the new seam.
+    //
+    // Architectural principles being committed to (from brief v3):
+    //   - Plumbing serves drills; drills do not serve plumbing.
+    //   - All capture is plumbing; drills are pure consumers.
+    //   - Camera angle is plumbing; drills declare which angles they support.
+    //   - Plumbing API will be unstable through v0.4.x; that's the design.
+    //
+    // ============================================================
+    // Golf Coach v0.3.3.3 (kept for reference — behavior below still applies)
     //
     // Changes from v0.3.3.2:
     //   + Single beep, not three. Field testing (April 27) confirmed the
@@ -1294,7 +1342,7 @@
     //   - Camera, pose pump, drawing, tempo analysis, chart, result UI shell
     // ============================================================
 
-    const COUNTDOWN_SECONDS = 6;
+    // v0.4.0: COUNTDOWN_SECONDS removed (was used only by legacy startCountdown)
     const MAX_SWING_MS = 4000;
     const MIN_PEAK_SEPARATION_MS = 300;
     const PRE_ADDRESS_BUFFER_MS = 300;
@@ -1320,6 +1368,218 @@
     // opens. No multi-tick interval (was READY_TICK_INTERVAL_MS in 0.3.3.2).
     const SHAPE_HEARD_FLASH_MS   = 1400;       // how long the "heard: pull" pill shows
     const SHAPE_WORDS = ['straight', 'pull', 'push', 'hook', 'slice', 'bad'];
+
+    // ============================================================
+    // v0.4.0: DRILL REGISTRY
+    // ============================================================
+    // Each drill is a self-contained config + analysis module. Plumbing
+    // dispatches into the active drill via DRILLS[sessionConfig.drill].
+    // Filled in below, after helper functions are defined (drills reference
+    // smooth(), findPeaks(), etc.). The registry is populated in one place
+    // (look for `DRILLS.tempo = { ... }` later in this file) so a future
+    // drill is a single new entry, not edits scattered across 8 functions.
+    //
+    // Registry shape (each entry):
+    //   id                   string, internal key (e.g. 'tempo')
+    //   displayName          string, shown to user (e.g. 'Tempo')
+    //   description          string, one-liner shown on drill picker
+    //   supportedAngles      array, e.g. ['faceOn'] or ['faceOn','downTheLine']
+    //   analyze(ctx)         function, takes shared segmentation context,
+    //                        returns {value, verdict, verdictClass,
+    //                        spokenPhrase, comment, diagRows, warnings, extra}
+    //   formatHeadline(ext)  function, drill-specific formatting (e.g. "3:1")
+    //                        — currently the headline string is built inside
+    //                        analyze(), formatHeadline reserved for cases
+    //                        where review screen needs to re-format
+    //   csvColumns           array of {name, fromExtra} pairs declaring extra
+    //                        per-drill CSV columns (beyond the universal core)
+    //   reviewSummary(swings)→ string, e.g. "avg tempo 3.1:1"
+    //   tableColumns         array of {label, fromExtra, format} for the
+    //                        per-swing review table (drill-specific only;
+    //                        plumbing always shows # and shape)
+    //   drawDistribution(canvas, swings) → void, optional. If absent,
+    //                        the distribution panel is hidden for this drill.
+    const DRILLS = {};
+
+    // Helper used by plumbing to fetch the active drill config. Falls back
+    // to 'tempo' if sessionConfig hasn't been set yet (e.g. during boot).
+    function getCurrentDrill() {
+      const id = (sessionConfig && sessionConfig.drill) || 'tempo';
+      return DRILLS[id] || DRILLS.tempo;
+    }
+
+    // ============================================================
+    // v0.4.0: DRILLS.tempo — the tempo drill module.
+    // ============================================================
+    // All tempo-specific logic lifted from various scattered locations
+    // (analyze(), commentForVerdict(), drawDistributionChart(),
+    // exportSessionCSV(), renderSwingTable(), showResult()) into a single
+    // self-contained config object. Adding a second drill (head stability,
+    // v0.4.1) means writing a parallel DRILLS.head_stability — same shape,
+    // different math.
+    //
+    // The registry entry must be assigned AFTER the file's helper functions
+    // (smooth, findPeaks) are declared, but before they're used (i.e. before
+    // analyze() runs). This block sits at the end of the constants section
+    // and uses a function reference for analyze (resolved at call time).
+    DRILLS.tempo = {
+      id: 'tempo',
+      displayName: 'Tempo',
+      description: 'Backswing-to-downswing ratio. Tour average ~3:1.',
+      supportedAngles: ['faceOn', 'downTheLine'],
+
+      // Verdict copy maps. 'good'/'off'/'error' are universal verdict
+      // classes; the SPECIFIC verdict strings are tempo's vocabulary.
+      verdictCommentMap: {
+        // 'off' — specific shape of the miss
+        'Backswing too fast':   'Backswing too fast',
+        'Downswing too slow':   'Downswing too slow',
+        'A little off 3:1':     'A little off 3:1',
+        // 'error' — friendlier plain-language rewrite
+        'Incomplete swing':     'Couldn’t detect a complete swing',
+        'No swing detected':    'Couldn’t detect a swing',
+        'Too short':            'Recording was too short',
+        'Recording too short':  'Recording was too short',
+        'Detection failed':     'Couldn’t read the swing',
+        'No pose detected':     'Couldn’t see the golfer'
+      },
+
+      // Map verdictClass → spoken phrase. Spoken vocabulary is deliberately
+      // tiny (3 phrases) for instant range-side parsing.
+      spokenForClass: {
+        good:  'in range',
+        off:   'a little off',
+        error: 'no swing'
+      },
+
+      // The drill's analysis function. Receives the shared swing-segmentation
+      // context (frames, wristY trace, four phase indices, smoothed trace,
+      // peak-detection diagnostics). Returns a result object the plumbing
+      // renders.
+      //
+      // ctx = {
+      //   frames, smoothed, wristY (clipped),
+      //   addressIdx, topIdx, impactIdx, finishIdx,    // canonical, segmenter-produced
+      //   cAddress, cTop, cImpact, cFinish,             // clipped-window indices
+      //   tAddress, beepTime, fps, totalMs, clippedDurationMs,
+      //   rawPeaks, mergedPeaks,
+      //   warnings,
+      //   cameraAngle                                   // v0.4.0
+      // }
+      //
+      // returns {
+      //   value, verdict, verdictClass,
+      //   diag, warnings,
+      //   extra: { ratio, backswingMs, downswingMs }    // for sessionSwings + CSV
+      // }
+      analyze: function(ctx) {
+        const { frames, smoothed,
+                addressIdx, topIdx, impactIdx, finishIdx,
+                tAddress, beepTime, fps, totalMs, clippedDurationMs,
+                rawPeaks, mergedPeaks, warnings } = ctx;
+
+        const tTop = frames[topIdx].t;
+        const tImpact = frames[impactIdx].t;
+        const tFinish = frames[finishIdx].t;
+        const backswingMs = tTop - tAddress;
+        const downswingMs = tImpact - tTop;
+        const beepToAddressMs = tAddress - beepTime;
+
+        const diag = [
+          ['Frames captured', frames.length],
+          ['Recording duration', `${(totalMs/1000).toFixed(2)} s`],
+          ['Effective FPS', fps.toFixed(1)],
+          ['Analyzed window', `${(clippedDurationMs/1000).toFixed(2)} s`],
+          ['Beep → motion onset', `${beepToAddressMs.toFixed(0)} ms`],
+          ['Address', `frame ${addressIdx} (${tAddress.toFixed(0)} ms)`],
+          ['Top', `frame ${topIdx} (${tTop.toFixed(0)} ms)`],
+          ['Impact', `frame ${impactIdx} (${tImpact.toFixed(0)} ms)`],
+          ['Finish', `frame ${finishIdx} (${tFinish.toFixed(0)} ms)`],
+          ['Backswing', `${backswingMs.toFixed(0)} ms`],
+          ['Downswing', `${downswingMs.toFixed(0)} ms`],
+          ['Raw peaks detected', rawPeaks.length],
+          ['Peaks after merging', mergedPeaks.length],
+          ['Wrist rise', (smoothed[addressIdx] - smoothed[topIdx]).toFixed(3)]
+        ];
+
+        let value = '—';
+        let ratioNum = null;
+        let verdict = '';
+        let verdictClass = '';
+
+        if (backswingMs <= 0 || downswingMs <= 0) {
+          verdict = 'Detection failed';
+          verdictClass = 'error';
+        } else if (smoothed[addressIdx] - smoothed[topIdx] < 0.08) {
+          verdict = 'No swing detected';
+          verdictClass = 'error';
+        } else {
+          const ratio = backswingMs / downswingMs;
+          ratioNum = ratio;
+          value = `${ratio.toFixed(1)}:1`;
+          if (ratio < 2.0) { verdict = 'Backswing too fast'; verdictClass = 'off'; }
+          else if (ratio > 4.0) { verdict = 'Downswing too slow'; verdictClass = 'off'; }
+          else if (ratio < 2.5 || ratio > 3.5) { verdict = 'A little off 3:1'; verdictClass = 'off'; }
+          else { verdict = 'In range'; verdictClass = 'good'; }
+        }
+
+        return {
+          value,
+          verdict,
+          verdictClass,
+          diag,
+          warnings,
+          extra: {
+            ratio: ratioNum,
+            backswingMs: backswingMs > 0 ? backswingMs : null,
+            downswingMs: downswingMs > 0 ? downswingMs : null
+          }
+        };
+      },
+
+      // Per-drill CSV columns appended after the universal core columns
+      // (swing_number, timestamp, drill, camera_angle, verdict, verdict_class,
+      // shape, four phase indices). Each entry: {name, get(swing) → string}.
+      csvColumns: [
+        { name: 'ratio',
+          get: s => (s.ratio != null && isFinite(s.ratio)) ? s.ratio.toFixed(2) : '' },
+        { name: 'backswing_ms',
+          get: s => s.backswingMs != null ? String(Math.round(s.backswingMs)) : '' },
+        { name: 'downswing_ms',
+          get: s => s.downswingMs != null ? String(Math.round(s.downswingMs)) : '' }
+      ],
+
+      // Per-drill review-screen summary stat (one line above the chart).
+      reviewSummary: function(swings) {
+        const swingsWithRatio = swings.filter(s => typeof s.ratio === 'number' && isFinite(s.ratio));
+        if (swingsWithRatio.length === 0) return '';
+        const avg = swingsWithRatio.reduce((a, s) => a + s.ratio, 0) / swingsWithRatio.length;
+        return `avg tempo ${avg.toFixed(1)}:1`;
+      },
+
+      // Per-drill review-screen table columns (shown after universal #/shape).
+      tableColumns: [
+        { label: 'BS ms',
+          get: s => s.backswingMs != null ? String(Math.round(s.backswingMs)) : '—' },
+        { label: 'DS ms',
+          get: s => s.downswingMs != null ? String(Math.round(s.downswingMs)) : '—' },
+        { label: 'Ratio',
+          get: s => (s.ratio != null && isFinite(s.ratio)) ? (s.ratio.toFixed(1) + ':1') : '—' }
+      ],
+
+      // Per-drill review-screen distribution chart. Returns the bucket
+      // definitions; plumbing handles the canvas-drawing primitive.
+      // If a future drill doesn't implement this, plumbing hides the
+      // distribution panel for that drill.
+      distributionBuckets: [
+        { label: '<2.0',    test: s => typeof s.ratio === 'number' && s.ratio < 2.0,                            cls: 'error' },
+        { label: '2.0–2.4', test: s => typeof s.ratio === 'number' && s.ratio >= 2.0 && s.ratio < 2.5,         cls: 'off' },
+        { label: '2.5–2.9', test: s => typeof s.ratio === 'number' && s.ratio >= 2.5 && s.ratio < 3.0,         cls: 'good' },
+        { label: '3.0–3.4', test: s => typeof s.ratio === 'number' && s.ratio >= 3.0 && s.ratio < 3.5,         cls: 'good' },
+        { label: '3.5–3.9', test: s => typeof s.ratio === 'number' && s.ratio >= 3.5 && s.ratio < 4.0,         cls: 'off' },
+        { label: '≥4.0',    test: s => typeof s.ratio === 'number' && s.ratio >= 4.0,                           cls: 'error' }
+      ]
+    };
 
     const video = document.getElementById('video');
     const overlay = document.getElementById('overlay');
@@ -1742,6 +2002,7 @@
         sessionConfig: sessionConfig
           ? {
               drill: sessionConfig.drill,
+              cameraAngle: sessionConfig.cameraAngle || 'faceOn',
               voiceEnabled: sessionConfig.voiceEnabled,
               shapeEnabled: sessionConfig.shapeEnabled
             }
@@ -1894,21 +2155,8 @@
       }
     }
 
-    function playBeep() {
-      if (!audioCtx) return;
-      const now = audioCtx.currentTime;
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, now);
-      gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.3, now + 0.02);
-      gain.gain.linearRampToValueAtTime(0, now + 0.25);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(now);
-      osc.stop(now + 0.3);
-    }
+    // v0.4.0: playBeep removed (legacy v0.1 high-pitched 880Hz tone, never
+    // called since v0.3.0). playTick (440Hz, used by ready-to-swing cue) stays.
 
     function playTick() {
       if (!audioCtx) return;
@@ -1926,29 +2174,9 @@
       osc.stop(now + 0.1);
     }
 
-    // v0.2.3 / v0.2.4: short, neutral confirmation chime played when a shape
-    // word is recognized. Single oscillator with a frequency sweep — matches
-    // the envelope style of playBeep/playTick which are known to work on both
-    // desktop Edge and iOS Safari. The previous two-oscillator version played
-    // fine on mobile (AirPods) but was silent on desktop Edge.
-    function playShapeChime() {
-      if (!audioCtx) return;
-      const now = audioCtx.currentTime;
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      // Sweep from 660 Hz up to 990 Hz (perfect fifth) over the tone's length,
-      // giving the "rising" feel of a confirmation chime.
-      osc.frequency.setValueAtTime(660, now);
-      osc.frequency.linearRampToValueAtTime(990, now + 0.14);
-      gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.2, now + 0.02);
-      gain.gain.linearRampToValueAtTime(0, now + 0.16);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(now);
-      osc.stop(now + 0.18);
-    }
+    // v0.4.0: playShapeChime removed (v0.2.3-era shape-recognition chime,
+    // replaced by TTS shape echo in v0.3.0; was kept as dead code through
+    // v0.3.x).
 
     async function setupPose() {
       pose = new Pose({
@@ -2380,41 +2608,9 @@
       }, POST_READY_DELAY_MS);
     }
 
-    function startCountdown() {
-      ensureAudio();
-      stopRecognition(); // v0.2: don't listen during countdown
-      listenIndicator.classList.remove('active');
-      // v0.2.1: if we came from waiting state, clear residual UI
-      resultPanel.classList.remove('visible');
-      shapeHeardEl.classList.remove('visible');
-      if (shapeHeardTimer) { clearTimeout(shapeHeardTimer); shapeHeardTimer = null; }
-      appState = 'counting';
-      let remaining = COUNTDOWN_SECONDS;
-      recordBtn.textContent = `${remaining}…`;
-      recordBtn.classList.add('counting');
-      recordBtn.disabled = true;
-      countdownEl.textContent = remaining;
-      countdownEl.classList.add('active');
-      countdownLabel.style.display = 'block';
-      recBorder.classList.add('countdown');
-      status.textContent = 'Get into your stance. Swing when the beep plays.';
-      playTick();
-      countdownTimer = setInterval(() => {
-        remaining--;
-        if (remaining > 0) {
-          recordBtn.textContent = `${remaining}…`;
-          countdownEl.textContent = remaining;
-          playTick();
-        } else {
-          clearInterval(countdownTimer);
-          countdownTimer = null;
-          countdownEl.classList.remove('active');
-          countdownLabel.style.display = 'none';
-          recBorder.classList.remove('countdown');
-          beginRecording();
-        }
-      }, 1000);
-    }
+    // v0.4.0: startCountdown (the v0.1/v0.2 6-second countdown ceremony)
+    // removed. Replaced by startSwing in v0.3.0; was kept as dead code for
+    // rollback. Three release lines later it's clearly not coming back.
 
     function beginRecording() {
       // v0.3.0: no beep. The recording window opens silently after the TTS
@@ -2714,64 +2910,37 @@
       const cImpact = impactIdx - clipStart;
       const cFinish = finishIdx - clipStart;
 
-      const tTop = frames[topIdx].t;
-      const tImpact = frames[impactIdx].t;
-      const tFinish = frames[finishIdx].t;
-      const backswingMs = tTop - tAddress;
-      const downswingMs = tImpact - tTop;
       const totalMs = frames[frames.length - 1].t;
       const fps = frames.length / (totalMs / 1000);
-      const beepToAddressMs = tAddress - beepTime;
       const clippedDurationMs = clippedFrames[clippedFrames.length - 1].t - clippedFrames[0].t;
 
-      const diag = [
-        ['Frames captured', frames.length],
-        ['Recording duration', `${(totalMs/1000).toFixed(2)} s`],
-        ['Effective FPS', fps.toFixed(1)],
-        ['Analyzed window', `${(clippedDurationMs/1000).toFixed(2)} s`],
-        ['Beep → motion onset', `${beepToAddressMs.toFixed(0)} ms`],
-        ['Address', `frame ${addressIdx} (${tAddress.toFixed(0)} ms)`],
-        ['Top', `frame ${topIdx} (${tTop.toFixed(0)} ms)`],
-        ['Impact', `frame ${impactIdx} (${tImpact.toFixed(0)} ms)`],
-        ['Finish', `frame ${finishIdx} (${tFinish.toFixed(0)} ms)`],
-        ['Backswing', `${backswingMs.toFixed(0)} ms`],
-        ['Downswing', `${downswingMs.toFixed(0)} ms`],
-        ['Raw peaks detected', rawPeaks.length],
-        ['Peaks after merging', mergedPeaks.length],
-        ['Wrist rise', (smoothed[addressIdx] - smoothed[topIdx]).toFixed(3)]
-      ];
-
-      let ratioValue = '—';
-      let ratioNum = null;         // v0.3.3: numeric ratio for session-review use
-      let verdict = '';
-      let verdictClass = '';
-
-      if (backswingMs <= 0 || downswingMs <= 0) {
-        verdict = 'Detection failed';
-        verdictClass = 'error';
-      } else if (smoothed[addressIdx] - smoothed[topIdx] < 0.08) {
-        verdict = 'No swing detected';
-        verdictClass = 'error';
-      } else {
-        const ratio = backswingMs / downswingMs;
-        ratioNum = ratio;
-        ratioValue = `${ratio.toFixed(1)}:1`;
-        if (ratio < 2.0) { verdict = 'Backswing too fast'; verdictClass = 'off'; }
-        else if (ratio > 4.0) { verdict = 'Downswing too slow'; verdictClass = 'off'; }
-        else if (ratio < 2.5 || ratio > 3.5) { verdict = 'A little off 3:1'; verdictClass = 'off'; }
-        else { verdict = 'In range'; verdictClass = 'good'; }
-      }
+      // v0.4.0: dispatch to active drill. The shared swing segmenter has
+      // produced the canonical {addressIdx, topIdx, impactIdx, finishIdx}
+      // contract; the drill computes its metric on top of that.
+      const drill = getCurrentDrill();
+      const ctx = {
+        frames, smoothed, wristY: clippedY,
+        addressIdx, topIdx, impactIdx, finishIdx,
+        cAddress, cTop, cImpact, cFinish,
+        tAddress, beepTime, fps, totalMs, clippedDurationMs,
+        rawPeaks, mergedPeaks, warnings,
+        cameraAngle: (sessionConfig && sessionConfig.cameraAngle) || 'faceOn'
+      };
+      const result = drill.analyze(ctx);
 
       showResult({
-        value: ratioValue, verdict, verdictClass,
+        value: result.value,
+        verdict: result.verdict,
+        verdictClass: result.verdictClass,
         wristY: clippedY,
         addressIdx: cAddress, topIdx: cTop, impactIdx: cImpact, finishIdx: cFinish,
-        diag, warnings,
-        // v0.3.3: pass the raw numeric fields so showResult can push them into
-        // sessionSwings without having to re-parse the "2.8:1" string.
-        ratioNum,
-        backswingMs: backswingMs > 0 ? backswingMs : null,
-        downswingMs: downswingMs > 0 ? downswingMs : null
+        diag: result.diag,
+        warnings: result.warnings || warnings,
+        // v0.4.0: extra fields are drill-specific (e.g. tempo provides
+        // ratio/backswingMs/downswingMs). showResult passes them into the
+        // sessionSwings record verbatim so the review screen / CSV / JSON
+        // can read them without knowing which drill.
+        extra: result.extra || {}
       });
     }
 
@@ -2851,66 +3020,53 @@
       }
     }
 
-    // v0.3.2: translate internal verdict strings (originating in analyze()
-    // and preserved in the raw JSON record) into golfer-facing comment text.
-    // Rule: additive only. For `good`, return '' — TTS already said "in
-    // range" and the headline shows the ratio. For `off` and `error`,
-    // return a plain-language reason that adds specific info the spoken
-    // word didn't carry.
-    const VERDICT_COMMENT_MAP = {
-      // 'off' verdicts — specific shape of the miss
-      'Backswing too fast':   'Backswing too fast',
-      'Downswing too slow':   'Downswing too slow',
-      'A little off 3:1':     'A little off 3:1',
-      // 'error' verdicts — friendlier plain-language rewrite
-      'Incomplete swing':     'Couldn’t detect a complete swing',
-      'No swing detected':    'Couldn’t detect a swing',
-      'Too short':            'Recording was too short',
-      'Recording too short':  'Recording was too short',
-      'Detection failed':     'Couldn’t read the swing',
-      'No pose detected':     'Couldn’t see the golfer'
-    };
-    function commentForVerdict(verdictClass, verdict) {
-      if (verdictClass === 'good') return '';
-      if (VERDICT_COMMENT_MAP[verdict]) return VERDICT_COMMENT_MAP[verdict];
-      // Unknown verdict string for the error/off class — pass through as-is.
-      // Better than a blank row when something unexpected happened.
-      return verdict || '';
-    }
+    // v0.4.0: VERDICT_COMMENT_MAP and commentForVerdict removed.
+    // Each drill provides its own verdictCommentMap (see DRILLS.tempo).
+    // showResult looks it up via getCurrentDrill().verdictCommentMap.
+    // Note: pre-dispatch plumbing errors (No pose detected, Recording too
+    // short, Too short, Incomplete swing) currently live in tempo's map
+    // as well — they happen before drill dispatch, so any drill needs to
+    // recognize these or fall back to the verdict-string pass-through.
+    // Cleaner home for these is "plumbing-owned baseline error map merged
+    // with each drill's map" — flagged for v0.4.x cleanup.
 
     function showResult({
       value, verdict, verdictClass,
       wristY, addressIdx, topIdx, impactIdx, finishIdx,
       diag, warnings,
-      // v0.3.3: numeric fields for session review. May be undefined on the
-      // early-exit error paths (frames < 15, no pose, recording too short,
-      // incomplete swing) — treated as null in the review record.
-      ratioNum, backswingMs, downswingMs
+      // v0.4.0: drill-specific extras (e.g. tempo provides
+      // {ratio, backswingMs, downswingMs}). Stored verbatim into the
+      // sessionSwings record. May be undefined on early-exit error paths.
+      extra
     }) {
-      // v0.3.0: speak the verdict FIRST, before any DOM work. iOS Safari TTS
+      const drill = getCurrentDrill();
+      // v0.4.0: speak the verdict FIRST, before any DOM work. iOS Safari TTS
       // has ~100-300ms first-utterance latency; kicking it off early means
-      // the word lands as close to analysis-complete as possible. Verdict
-      // vocabulary is deliberately tiny (three words) so it's fast and
-      // instantly parseable on the range. Detail lives in the post-session
-      // review, not in the instant feedback.
-      let spokenPhrase;
-      if (verdictClass === 'good')       spokenPhrase = 'in range';
-      else if (verdictClass === 'off')   spokenPhrase = 'a little off';
-      else                               spokenPhrase = 'no swing';  // covers 'error' and any unclassified
+      // the word lands as close to analysis-complete as possible. Spoken
+      // phrase is drill-defined — tempo says "in range / a little off /
+      // no swing"; head stability will say different words.
+      const spokenForClass = (drill && drill.spokenForClass) || {
+        good: 'in range', off: 'a little off', error: 'no swing'
+      };
+      const spokenPhrase = spokenForClass[verdictClass] || spokenForClass.error;
       speak(spokenPhrase);
 
-      // v0.3.2: MAIN panel rendering.
-      // Headline: the tempo ratio, or "N/A" when there's nothing to show.
-      // The internal code already passes "—" for errors; we translate that
-      // to "N/A" to match what TTS says ("no swing" ≈ "not available").
+      // v0.3.2 / v0.4.0: MAIN panel rendering.
+      // Headline: the drill's value string (e.g. tempo's "3:1"), or "N/A"
+      // when there's nothing to show. The drill returns "—" for errors;
+      // we translate that to "N/A" to match what TTS says.
       resultValue.textContent = (value && value !== '—') ? value : 'N/A';
       resultValue.className = '';
       if (verdictClass) resultValue.classList.add(verdictClass);
 
-      // Comment row: plain-language reason, additive only — never repeats
-      // what TTS already spoke or what the headline already shows.
-      // Rule: good → empty; off/error → specific detail mapped from verdict.
-      resultComment.textContent = commentForVerdict(verdictClass, verdict);
+      // Comment row: drill provides the verdict→comment map. Plumbing rule:
+      // good → empty (don't repeat the headline); off/error → mapped detail.
+      const commentMap = (drill && drill.verdictCommentMap) || {};
+      let commentText = '';
+      if (verdictClass !== 'good') {
+        commentText = commentMap[verdict] || verdict || '';
+      }
+      resultComment.textContent = commentText;
       resultComment.className = '';
       if (verdictClass && resultComment.textContent) resultComment.classList.add(verdictClass);
 
@@ -2975,37 +3131,34 @@
         }))
       };
 
-      // v0.3.3.1: sessionSwings now retains the per-swing `frames` array
-      // alongside the summary fields. Previously stripped for memory
-      // (comment below), but a 20-swing session is ~500KB — comfortably
-      // fine. Keeping frames lets the session-wide raw JSON dump on the
-      // review screen include everything needed for offline drill analysis
-      // (nose + shoulder trajectories for head stability, etc.).
-      //
-      // v0.3.3: push a lightweight copy into sessionSwings for the review
-      // screen. NO full `wristY` for non-complete swings, but we keep it
-      // for complete ones because the average-shape chart needs it.
+      // v0.4.0: sessionSwings record is now drill-agnostic at the core.
+      // Universal fields (timestamp, drill, cameraAngle, verdict,
+      // verdictClass, value, shape, four phase indices, wristY, frames) live
+      // at the top level. Drill-specific fields come from the drill's
+      // analyze() result.extra and are spread into the record. So tempo's
+      // ratio/backswingMs/downswingMs sit alongside head stability's future
+      // lat/vert peaks without either drill knowing about the other.
       const isComplete =
         typeof addressIdx === 'number' &&
         typeof finishIdx === 'number' &&
         finishIdx > addressIdx &&
         Array.isArray(wristY) && wristY.length >= 10;
-      sessionSwings.push({
+      const swingRecord = {
         timestamp: lastAnalysis.timestamp,
         drill: lastAnalysis.drill,
+        cameraAngle: (sessionConfig && sessionConfig.cameraAngle) || 'faceOn',
         verdict, verdictClass,
-        value,   // v0.3.3.1: keep raw display value (e.g. "2.8:1") for JSON
-        ratio: (typeof ratioNum === 'number' && isFinite(ratioNum)) ? ratioNum : null,
-        backswingMs: (typeof backswingMs === 'number' && backswingMs > 0) ? backswingMs : null,
-        downswingMs: (typeof downswingMs === 'number' && downswingMs > 0) ? downswingMs : null,
+        value,
         shape: pendingShape,
         addressIdx, topIdx, impactIdx, finishIdx,
         wristY: isComplete ? wristY.slice() : null,
-        // v0.3.3.1: per-frame landmarks. Same shape as lastAnalysis.frames
-        // so downstream analysis code works on either single-swing or
-        // session-wide JSON without branching.
-        frames: lastAnalysis.frames
-      });
+        frames: lastAnalysis.frames,
+        // Spread drill-specific extras (e.g. tempo: ratio/backswingMs/downswingMs).
+        // These become first-class fields on the swing record without plumbing
+        // knowing the drill.
+        ...(extra || {})
+      };
+      sessionSwings.push(swingRecord);
 
       // v0.2.1: enter the 'waiting' state — recognition listens for shape
       // words OR "ready" to start the next swing. This is what makes the
@@ -3028,20 +3181,9 @@
       }
     }
 
-    function saveRawData() {
-      if (!lastAnalysis) return;
-      const json = JSON.stringify(lastAnalysis, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      a.href = url;
-      a.download = `swing-${stamp}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
+    // v0.4.0: saveRawData removed (per-swing JSON dump, callable from a link
+    // that was itself removed in v0.3.3.1; kept as dead code through v0.3.3.x).
+    // Session-wide exportSessionRawJSON on the review screen supersedes it.
 
     recordBtn.addEventListener('click', () => {
       ensureAudio();
@@ -3138,6 +3280,9 @@
       ensureAudio();
       sessionConfig = {
         drill: 'tempo',                  // future: derived from selected drill tile
+        cameraAngle: 'faceOn',           // v0.4.0: only face-on supported in v0.4.x
+                                         //         drill registry's supportedAngles list
+                                         //         filters which drills are pickable per angle
         voiceEnabled: voiceEnabled,
         shapeEnabled: shapeEnabled,
         startedAt: Date.now()
