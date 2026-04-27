@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.3</title>
+  <title>Golf Coach — v0.4.1.4</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -1075,6 +1075,51 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 
   <script>
+    // ============================================================
+    // Golf Coach v0.4.1.4 — JSON INDEX FIX (clip vs. absolute)
+    //
+    // Bug fix release. v0.4.1.3 added per-swing video capture; the very
+    // first ground-truth review (April 27) revealed a long-standing bug
+    // visible only in post-hoc JSON analysis — confirmed by extracting
+    // video frames at the JSON's claimed addressIdx/topIdx/impactIdx/
+    // finishIdx and seeing them point to consistently wrong positions
+    // (e.g. "Top" frame would show the user still bending into address).
+    //
+    // The bug:
+    //   - Live drill code (tempo, head stability) consumed ABSOLUTE phase
+    //     indices via the analyze() ctx, paired with the full `frames`
+    //     array — and was correct.
+    //   - showResult() received CLIP-RELATIVE indices for the chart
+    //     display (which clips to address-300ms .. finish+400ms for a
+    //     readable trace), and stored those clip-relative values in
+    //     lastAnalysis / sessionSwings JSON — alongside the unclipped
+    //     `frames` array. So the JSON's frames[topIdx] etc. resolved to
+    //     wrong frames.
+    //   - This silently corrupted every exported swing record. The
+    //     verdict the app showed at runtime was correct; the JSON we'd
+    //     analyze offline was not.
+    //
+    // The fix:
+    //   - showResult() now also receives absolute indices and the full
+    //     smoothed wristY trace from analyze().
+    //   - lastAnalysis and the sessionSwings record persist the absolute
+    //     pair (full frames + absolute indices + full wristY).
+    //   - Display path unchanged: the chart still uses the clipped pair,
+    //     stored on lastAnalysis as chartWristY/chartAddressIdx/etc. for
+    //     the debug-toggle redraw at line ~4087.
+    //
+    // What's untouched:
+    //   - Segmenter algorithm — peak detection, address detection,
+    //     prominence, MAX_SWING_MS, all unchanged. The v0.4.1.3 dataset
+    //     verified the algorithm itself was finding correct peaks; only
+    //     the persisted snapshot was wrong.
+    //   - Drill verdicts at runtime — already correct, ctx had absolute
+    //     indices.
+    //   - Video capture, download, all v0.4.1.3 dev tooling.
+    //   - Known deferred: iOS Safari multi-download closure bug (Bug 1
+    //     in the v0.4.1.3 hardening notes). Hardening is now a desktop
+    //     workflow on Edge so this stays parked until production-time.
+    //
     // ============================================================
     // Golf Coach v0.4.1.3 — DEV BUILD (video capture for ground-truth)
     //
@@ -2629,7 +2674,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.3',
+        version: '0.4.1.4',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3691,8 +3736,26 @@
         value: result.value,
         verdict: result.verdict,
         verdictClass: result.verdictClass,
+        // v0.4.1.4: chart uses CLIPPED wristY + CLIPPED indices (cAddress
+        // etc.) — this gives the nicely-trimmed visualization centered on
+        // the swing window. Unchanged display behaviour.
         wristY: clippedY,
         addressIdx: cAddress, topIdx: cTop, impactIdx: cImpact, finishIdx: cFinish,
+        // v0.4.1.4 fix: ALSO pass the absolute indices and the full
+        // (unclipped) smoothed wristY trace. These get stored in the
+        // sessionSwings JSON / lastAnalysis so post-hoc analysis tools can
+        // index the FULL `frames` array correctly. Bug found in v0.4.1.3
+        // hardening: JSON paired clip-relative indices with the full frames
+        // array, which made every recorded swing's phase indices point to
+        // wrong frames when read post-hoc. The drills themselves were never
+        // affected (they consumed absolute indices via ctx during live
+        // analysis); only the persisted snapshot was inconsistent. See
+        // segmenter_hardening_plan.md for the diagnosis.
+        absAddressIdx: addressIdx,
+        absTopIdx: topIdx,
+        absImpactIdx: impactIdx,
+        absFinishIdx: finishIdx,
+        fullWristY: smoothed,
         diag: result.diag,
         warnings: result.warnings || warnings,
         // v0.4.0: extra fields are drill-specific (e.g. tempo provides
@@ -3796,7 +3859,14 @@
 
     function showResult({
       value, verdict, verdictClass,
+      // CLIPPED display data — drives the chart on the result screen.
       wristY, addressIdx, topIdx, impactIdx, finishIdx,
+      // v0.4.1.4: ABSOLUTE-frame phase indices and the FULL smoothed wristY
+      // trace. These get persisted into lastAnalysis / sessionSwings JSON so
+      // post-hoc consumers can index `frames` correctly. May be undefined on
+      // the early-exit error paths in analyze() — those still pass the
+      // (possibly null) clip-relative indices via the older parameters.
+      absAddressIdx, absTopIdx, absImpactIdx, absFinishIdx, fullWristY,
       diag, warnings,
       // v0.4.0: drill-specific extras (e.g. tempo provides
       // {ratio, backswingMs, downswingMs}). Stored verbatim into the
@@ -3884,7 +3954,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.3',
+        version: '0.4.1.4',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -3898,8 +3968,27 @@
         timestamp: new Date().toISOString(),
         value, verdict,
         shape: pendingShape,         // v0.2.1: populated later if user calls out a shape
-        addressIdx, topIdx, impactIdx, finishIdx,
-        wristY,
+        // v0.4.1.4 fix: persist ABSOLUTE phase indices and FULL smoothed
+        // wristY when available. Falls back to clip-relative + clipped
+        // wristY on early-exit error paths (where abs* are undefined).
+        // Pairing absolute indices with the full `frames` array means
+        // `frames[topIdx]` etc. resolve to the right frame post-hoc, which
+        // wasn't the case in v0.4.1.3 — see segmenter_hardening_plan.md.
+        addressIdx: (absAddressIdx != null) ? absAddressIdx : addressIdx,
+        topIdx:     (absTopIdx     != null) ? absTopIdx     : topIdx,
+        impactIdx:  (absImpactIdx  != null) ? absImpactIdx  : impactIdx,
+        finishIdx:  (absFinishIdx  != null) ? absFinishIdx  : finishIdx,
+        wristY: (fullWristY && fullWristY.length) ? fullWristY : wristY,
+        // v0.4.1.4: keep the clipped pair around for the debug-toggle
+        // chart redraw at line ~4087. The initial chart render at the
+        // bottom of showResult() also uses these. Pre-existing clipped
+        // chart was the more readable view and we don't want to change
+        // that visible behavior with this fix.
+        chartWristY: wristY,
+        chartAddressIdx: addressIdx,
+        chartTopIdx: topIdx,
+        chartImpactIdx: impactIdx,
+        chartFinishIdx: finishIdx,
         frames: frames.map(f => ({
           t: f.t,
           leftWrist: f.landmarks[LM.LEFT_WRIST],
@@ -3919,11 +4008,21 @@
       // analyze() result.extra and are spread into the record. So tempo's
       // ratio/backswingMs/downswingMs sit alongside head stability's future
       // lat/vert peaks without either drill knowing about the other.
+      // v0.4.1.4: build per-record indices and wristY from absolute / full
+      // values when available. Same rationale as the lastAnalysis fix above
+      // — keep `frames` and the indices into it consistent. isComplete is
+      // computed from the values that will actually be persisted.
+      const persistAddressIdx = (absAddressIdx != null) ? absAddressIdx : addressIdx;
+      const persistTopIdx     = (absTopIdx     != null) ? absTopIdx     : topIdx;
+      const persistImpactIdx  = (absImpactIdx  != null) ? absImpactIdx  : impactIdx;
+      const persistFinishIdx  = (absFinishIdx  != null) ? absFinishIdx  : finishIdx;
+      const persistWristY     = (fullWristY && fullWristY.length) ? fullWristY : wristY;
+
       const isComplete =
-        typeof addressIdx === 'number' &&
-        typeof finishIdx === 'number' &&
-        finishIdx > addressIdx &&
-        Array.isArray(wristY) && wristY.length >= 10;
+        typeof persistAddressIdx === 'number' &&
+        typeof persistFinishIdx === 'number' &&
+        persistFinishIdx > persistAddressIdx &&
+        Array.isArray(persistWristY) && persistWristY.length >= 10;
       const swingRecord = {
         timestamp: lastAnalysis.timestamp,
         drill: lastAnalysis.drill,
@@ -3931,8 +4030,11 @@
         verdict, verdictClass,
         value,
         shape: pendingShape,
-        addressIdx, topIdx, impactIdx, finishIdx,
-        wristY: isComplete ? wristY.slice() : null,
+        addressIdx: persistAddressIdx,
+        topIdx:     persistTopIdx,
+        impactIdx:  persistImpactIdx,
+        finishIdx:  persistFinishIdx,
+        wristY: isComplete ? persistWristY.slice() : null,
         frames: lastAnalysis.frames,
         // v0.4.1.3: video blob for ground-truth debugging. Populated by the
         // MediaRecorder onstop handler below — may be null if recording
@@ -4039,12 +4141,16 @@
       // earlier may have produced an empty canvas.
       if (!nowHidden && lastAnalysis) {
         requestAnimationFrame(() => {
+          // v0.4.1.4: chart fields are dedicated to display (clipped). The
+          // top-level addressIdx / wristY etc. on lastAnalysis are now the
+          // absolute / full versions intended for JSON export and post-hoc
+          // analysis — not for the chart, which would otherwise widen.
           drawChart(
-            lastAnalysis.wristY,
-            lastAnalysis.addressIdx,
-            lastAnalysis.topIdx,
-            lastAnalysis.impactIdx,
-            lastAnalysis.finishIdx
+            lastAnalysis.chartWristY,
+            lastAnalysis.chartAddressIdx,
+            lastAnalysis.chartTopIdx,
+            lastAnalysis.chartImpactIdx,
+            lastAnalysis.chartFinishIdx
           );
         });
       }
