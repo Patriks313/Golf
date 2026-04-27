@@ -1037,6 +1037,41 @@
 
   <script>
     // ============================================================
+    // Golf Coach v0.3.3.2
+    //
+    // Changes from v0.3.3.1:
+    //   + Three-beep auditory "ready-to-swing" cue replaces the silent settle.
+    //     Field testing exposed that the visual grey→red "Recording" transition
+    //     was an unreliable signal — a session at floor-mounted phone setup
+    //     produced 8/12 swings where the user was already mid-swing at frame 0
+    //     of the recording. Fix: after speaking "ready" (TTS echo), play three
+    //     gentle 440Hz ticks ~600ms apart. Recording opens silently on the
+    //     third beep. The user swings ANYWHERE inside the recording window at
+    //     their natural rhythm — they are not timing to a specific beep.
+    //   + Total ready→record time is now ~1.5s TTS + 1.8s ticks ≈ 3.3s, only
+    //     marginally longer than the v0.3.3.1 1.5s settle. The change isn't
+    //     about more time, it's about MAKING THE START AUDIBLE so the user
+    //     stops swinging during the silent settle.
+    //   + Re-establishes a long-deprecated principle: AUDITORY CUEING IS
+    //     PRIMARY for time-of-action signals; visual is supplementary. This
+    //     was the original v0.1/v0.2 design (countdown + tick). v0.3.0 removed
+    //     it on the assumption that the TTS "ready" echo + visual cue was
+    //     enough; field data proved otherwise. v0.3.3.2 brings audio back
+    //     without bringing the slow countdown back.
+    //
+    // Constants:
+    //   READY_TICK_COUNT       = 3
+    //   READY_TICK_INTERVAL_MS = 600   (tunable from field data)
+    //
+    // Implementation: reuses the existing playTick() function unchanged.
+    //
+    // Scope discipline — explicitly NOT in v0.3.3.2:
+    //   - No change to the recording window length
+    //   - No change to capture pipeline, analysis, TTS verdicts, or any drill
+    //   - The dead-code `startCountdown` from v0.1/0.2 era is NOT resurrected
+    //     (it's a per-second 6-tick countdown; that's a different ceremony)
+    //
+    // ============================================================
     // Golf Coach v0.3.3.1
     //
     // Changes from v0.3.3:
@@ -1258,6 +1293,11 @@
     const RECORDING_DURATION_MS = 5000;        // auto-stop recording 5s after window opens
     const POST_READY_DELAY_MS   = 1500;        // v0.3.0: pause between TTS "ready" echo
                                                 //         finishing and recording opening.
+    // v0.3.3.2: three-beep ready-to-swing cue. Time between consecutive
+    // ticks. Recording opens on tick 3. Total cue time = 2 × this value.
+    // Tunable from field data — 600ms gives a clear "tick … tick … tick"
+    // rhythm that's quick enough not to feel like the old v0.2 countdown.
+    const READY_TICK_INTERVAL_MS = 600;
     const SHAPE_HEARD_FLASH_MS   = 1400;       // how long the "heard: pull" pill shows
     const SHAPE_WORDS = ['straight', 'pull', 'push', 'hook', 'slice', 'bad'];
 
@@ -1670,16 +1710,11 @@
     // drill-algorithm development (head stability first).
     //
     // Structure mirrors the per-swing lastAnalysis schema so tools that
-    // parse one work on the other:
-    //   { version, sessionStartedAt, sessionEndedAt, sessionConfig,
-    //     swings: [ { swingNumber, timestamp, drill, verdict, verdictClass,
-    //                 value, ratio, backswingMs, downswingMs, shape,
-    //                 addressIdx, topIdx, impactIdx, finishIdx,
-    //                 wristY, frames: [...] }, ... ] }
+    // parse one work on the other.
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.3.3.1',
+        version: '0.3.3.2',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -2286,19 +2321,25 @@
     // Countdown / recording (from v0.1.6, with voice-pause hooks)
     // ============================================================
 
-    // v0.3.0: startSwing is the new entry point for "user said ready, begin the
-    // next swing." Replaces the v0.2.x countdown ceremony. Flow:
-    //   1. Speak "ready" (TTS echo — confirms to the golfer that the app heard)
-    //   2. Wait POST_READY_DELAY_MS (~1.5s) for the settle
-    //   3. Call beginRecording() — silent open of the 5s recording window
+    // v0.3.3.2: AUDITORY READY-TO-SWING CUE.
+    // Field-test finding: a session at floor-mounted phone setup produced
+    // 8 of 12 swings starting BEFORE recording opened — the user was
+    // already mid-swing at frame 0 because the silent settle pause and
+    // the visual grey→red "Recording" transition aren't audible cues, and
+    // the phone-on-the-floor setup means the visual cue is also out of
+    // sight. Fix: after speaking "ready" (TTS echo), play three gentle
+    // 440Hz ticks. Recording opens silently on the third beep.
     //
-    // The analysis pipeline is unchanged: motion-onset detection in
-    // analyze() still finds Address as the last frame before sustained hand
-    // motion, regardless of when within the window the golfer actually swings.
-    // So the exact start moment of recording is not a measurement anchor — the
-    // golfer swings at their own pace.
+    // CRUCIAL: the user does NOT swing AT the third beep. The user
+    // swings ANYWHERE inside the recording window at their natural
+    // rhythm. The ticks are a "starting gate is open now" cue, not a
+    // "swing now" command. The recording window is plenty long for
+    // real-world rhythm.
     //
-    // startCountdown (below) is retained as dead code for reference / rollback.
+    // v0.3.0 (kept for context): startSwing replaced the v0.2.x countdown
+    // ceremony with a quieter "ready" → settle → silent open flow. That
+    // flow lasted 0.3.0–0.3.3.1; v0.3.3.2 reinstates audible cueing
+    // because field data showed silent timing was the wrong call.
     function startSwing() {
       ensureAudio();
       stopRecognition();                  // don't listen during the swing
@@ -2311,17 +2352,41 @@
       recordBtn.textContent = '…';
       recordBtn.classList.add('counting');
       recordBtn.disabled = true;
-      status.textContent = 'Get into your stance — recording opens shortly.';
+      status.textContent = 'Get into your stance — recording opens on the third beep.';
 
       speak('ready');                     // TTS echo — golfer hears "ready" back
 
-      // Short settle pause, then open the recording window silently.
+      // v0.3.3.2: schedule three ticks + recording-open. All driven by
+      // a single setTimeout chain so we can cancel cleanly.
+      // Timing: ~1.5s for "ready" TTS, then 600ms × 2 between beeps (so
+      // beep 1, beep 2 600ms later, beep 3 600ms later, recording opens
+      // on beep 3). Total ready→record ≈ 1.5s + 1.2s = 2.7s, only ~1.2s
+      // longer than v0.3.3.1's silent settle.
       if (readyDelayTimer) { clearTimeout(readyDelayTimer); readyDelayTimer = null; }
+
+      const startTickAfterTTSMs = POST_READY_DELAY_MS;  // wait for "ready" TTS to finish
+      const tickInterval = READY_TICK_INTERVAL_MS;
+
+      // Beep 1
+      setTimeout(() => {
+        if (appState !== 'counting') return;
+        playTick();
+      }, startTickAfterTTSMs);
+
+      // Beep 2
+      setTimeout(() => {
+        if (appState !== 'counting') return;
+        playTick();
+      }, startTickAfterTTSMs + tickInterval);
+
+      // Beep 3 + open recording (same instant — beep 3 IS the cue that
+      // recording is now live).
       readyDelayTimer = setTimeout(() => {
         readyDelayTimer = null;
         if (appState !== 'counting') return;   // user cancelled somehow
+        playTick();
         beginRecording();
-      }, POST_READY_DELAY_MS);
+      }, startTickAfterTTSMs + (2 * tickInterval));
     }
 
     function startCountdown() {
@@ -2938,7 +3003,7 @@
         timestamp: lastAnalysis.timestamp,
         drill: lastAnalysis.drill,
         verdict, verdictClass,
-        value,   // v0.3.3.1: keep the raw value too (e.g. "2.8:1") for JSON
+        value,   // v0.3.3.1: keep raw display value (e.g. "2.8:1") for JSON
         ratio: (typeof ratioNum === 'number' && isFinite(ratioNum)) ? ratioNum : null,
         backswingMs: (typeof backswingMs === 'number' && backswingMs > 0) ? backswingMs : null,
         downswingMs: (typeof downswingMs === 'number' && downswingMs > 0) ? downswingMs : null,
