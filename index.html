@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.2</title>
+  <title>Golf Coach — v0.4.1.3</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -852,7 +852,7 @@
       margin-top: 10px;
     }
 
-    #review-export-btn, #review-export-raw-btn, #review-discard-btn {
+    #review-export-btn, #review-export-raw-btn, #review-export-videos-btn, #review-discard-btn {
       padding: 14px;
       font-size: 15px;
       font-weight: 600;
@@ -861,7 +861,7 @@
       cursor: pointer;
     }
 
-    #review-export-btn, #review-export-raw-btn {
+    #review-export-btn, #review-export-raw-btn, #review-export-videos-btn {
       background: transparent;
       border: 1px solid var(--fg);
       color: var(--fg);
@@ -873,7 +873,7 @@
       color: var(--error);
     }
 
-    #review-export-btn:active, #review-export-raw-btn:active, #review-discard-btn:active { opacity: 0.75; }
+    #review-export-btn:active, #review-export-raw-btn:active, #review-export-videos-btn:active, #review-discard-btn:active { opacity: 0.75; }
 
     /* ----------------- End-session button (in-session) ---------- */
     /* v0.3.1 patch: End session was briefly a floating top-right button,
@@ -999,6 +999,9 @@
       <div class="review-actions">
         <button id="review-export-btn">Download session CSV</button>
         <button id="review-export-raw-btn">Download raw data (JSON)</button>
+        <!-- v0.4.1.3: dev tool for ground-truth segmenter debugging.
+             Shown only when session has at least one captured video. -->
+        <button id="review-export-videos-btn" style="display:none;">Download videos</button>
         <button id="review-discard-btn">Discard and end</button>
       </div>
     </div>
@@ -1072,6 +1075,56 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 
   <script>
+    // ============================================================
+    // Golf Coach v0.4.1.3 — DEV BUILD (video capture for ground-truth)
+    //
+    // Single-purpose patch release. Adds video recording of every swing
+    // for offline ground-truth review of segmenter behavior. Triggered by
+    // April 27 sessions showing ~22% incomplete-swing rate where JSON
+    // alone couldn't tell us whether the algorithm or the swing itself
+    // was at fault.
+    //
+    //   + AUTOMATIC VIDEO CAPTURE per swing. MediaRecorder runs alongside
+    //     the existing pose pipeline, capturing the same camera stream.
+    //     Spans exactly the swing's recording window (beginRecording →
+    //     stopRecording, ~5 seconds). Blobs held in memory on each swing
+    //     record's videoBlob field. iOS Safari typically uses mp4/avc1;
+    //     other browsers fall back to webm/vp8 or default.
+    //
+    //   + DOWNLOAD VIDEOS button on the review screen. Single tap
+    //     downloads every captured swing as session-<TS>-swing-NN.mp4
+    //     (or .webm). Filenames correlate to JSON's swingNumber so the
+    //     two sets can be aligned offline. Sequential downloads with
+    //     250ms gaps to avoid Safari's "too many downloads" guard.
+    //     Button is hidden if MediaRecorder is unsupported or no videos
+    //     captured.
+    //
+    //   + DISCARD releases video blobs along with the rest of session
+    //     state — same data hygiene as JSON dumps. No persistence.
+    //
+    // Memory note: ~3-5 MB per 5-second 720p clip. A 20-swing session
+    // ≈ 60-100 MB held in memory until you tap Download or Discard.
+    // iOS Safari MAY hit limits beyond that; if so, do shorter sessions
+    // (5-10 swings) and run multiple. Per Patrik's request April 27
+    // evening: NO per-swing manual saves — saves happen at session end
+    // only.
+    //
+    // What does NOT change:
+    //   - Pose pipeline, segmenter, all drills — completely untouched.
+    //     This is purely additive; setting mediaRecorderSupported = false
+    //     reproduces v0.4.1.2 behavior bit-for-bit.
+    //   - JSON / CSV format unchanged. Videos are a separate file set.
+    //   - All v0.4.1.2 behavior preserved (head-stability gate display,
+    //     directional vocabulary, drill picker, etc.).
+    //
+    // Scope discipline:
+    //   - This is dev tooling, not a permanent feature.
+    //   - Once segmenter is hardened, video capture should likely be
+    //     hidden behind a settings toggle or removed entirely.
+    //   - Do NOT layer drill changes onto this release. v0.4.1.3 is a
+    //     diagnostic instrument; v0.4.2+ resumes feature work after
+    //     ground-truth analysis informs segmenter fixes.
+    //
     // ============================================================
     // Golf Coach v0.4.1.2
     //
@@ -2142,6 +2195,7 @@
     const reviewEmptyState = document.getElementById('review-empty-state');
     const reviewExportBtn = document.getElementById('review-export-btn');
     const reviewExportRawBtn = document.getElementById('review-export-raw-btn');
+    const reviewExportVideosBtn = document.getElementById('review-export-videos-btn');  // v0.4.1.3
     const reviewDiscardBtn = document.getElementById('review-discard-btn');
 
     let pose = null;
@@ -2178,6 +2232,38 @@
     // be multi-KB each; we don't need them for review). Dropped on Discard
     // and end. Not persisted (v0.3.4 adds that).
     let sessionSwings = [];
+
+    // v0.4.1.3: video capture for ground-truth debugging.
+    // ----------------------------------------------------------------
+    // The segmenter has a real reliability issue (~22% incomplete-swing
+    // rate on April 27 sessions). We can't fix what we can't see — JSON
+    // alone tells us "the algorithm bailed" without telling us "and the
+    // user actually swung normally" or "and the user did something
+    // unusual." Saving video next to JSON closes that gap.
+    //
+    // Behavior:
+    //   - cameraStream is captured at startCamera() time, stashed for
+    //     MediaRecorder use later.
+    //   - For each swing, MediaRecorder records from beginRecording() to
+    //     stopRecording(). The resulting blob is held in memory on the
+    //     swing's sessionSwings record (videoBlob field).
+    //   - At end of session, the review screen exposes a "Download videos"
+    //     button that downloads each swing's video as swing-N.mp4. The
+    //     filename matches the JSON's swingNumber so they can be
+    //     correlated offline.
+    //   - On Discard, blobs are released with the rest of session state.
+    //   - Memory: ~3-5 MB per 5-second 720p video × N swings. A 20-swing
+    //     session = ~60-100 MB held in memory. iOS Safari may struggle
+    //     beyond that; the user is responsible for ending the session
+    //     and downloading before going for round 2 if they hit limits.
+    //
+    // This is dev tooling, not a permanent feature. Once the segmenter
+    // is hardened (v0.4.x), video-save will likely be removed or hidden.
+    let cameraStream = null;
+    let mediaRecorder = null;
+    let currentVideoChunks = [];      // chunks for the swing currently being recorded
+    let mediaRecorderSupported = false;
+    let mediaRecorderMimeType = '';
 
     // v0.3.1: mode-flip helpers. Camera keeps running across the flip —
     // we don't stop/restart the pose pump or getUserMedia stream, just
@@ -2245,6 +2331,7 @@
         reviewTableSection.style.display = 'none';
         reviewEmptyState.style.display = 'block';
         reviewExportBtn.style.display = 'none';
+        reviewExportVideosBtn.style.display = 'none';   // v0.4.1.3
         return;
       }
 
@@ -2253,6 +2340,15 @@
       reviewTableSection.style.display = '';
       reviewEmptyState.style.display = 'none';
       reviewExportBtn.style.display = '';
+      // v0.4.1.3: show "Download videos" button only if at least one swing
+      // actually has a captured video. If MediaRecorder was unsupported,
+      // every videoBlob is null and we hide the button entirely — no point
+      // showing a control that produces nothing.
+      const swingsWithVideo = swings.filter(s => s.videoBlob).length;
+      reviewExportVideosBtn.style.display = swingsWithVideo > 0 ? '' : 'none';
+      reviewExportVideosBtn.textContent = swingsWithVideo === n
+        ? `Download videos (${n})`
+        : `Download videos (${swingsWithVideo}/${n})`;
 
       // --- Aggregate summary -------------------------------------------
       // v0.4.0: drill provides its own summary stat (e.g. tempo: "avg
@@ -2533,7 +2629,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.2',
+        version: '0.4.1.3',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -2592,6 +2688,45 @@
       URL.revokeObjectURL(url);
     }
 
+    // v0.4.1.3: download all captured swing videos as individual files.
+    // Files are named swing-NN.mp4 (or .webm depending on the browser-
+    // supported mime type) where NN matches the swing's 1-indexed position
+    // in the session — same as the JSON's swingNumber field, so a JSON +
+    // video set can be correlated by filename.
+    //
+    // Sequential downloads with a small delay between them: Safari has
+    // historically rejected simultaneous download triggers (treated as
+    // popup spam) so we fire one every 250ms.
+    function exportSessionVideos() {
+      const withVideo = [];
+      sessionSwings.forEach((sw, i) => {
+        if (sw.videoBlob) withVideo.push({ swing: sw, idx: i + 1 });
+      });
+      if (withVideo.length === 0) return;
+
+      // Pick file extension from the mime type. mp4 ⇒ .mp4, webm ⇒ .webm.
+      const ext = (sessionSwings[0].videoMimeType || '').includes('webm') ? 'webm' : 'mp4';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+
+      let i = 0;
+      const next = () => {
+        if (i >= withVideo.length) return;
+        const { swing, idx } = withVideo[i];
+        const url = URL.createObjectURL(swing.videoBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `session-${stamp}-swing-${String(idx).padStart(2, '0')}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Revoke after a tick — the browser still needs the URL during click.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        i++;
+        if (i < withVideo.length) setTimeout(next, 250);
+      };
+      next();
+    }
+
     function csvEscape(v) {
       const s = String(v);
       if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
@@ -2612,6 +2747,40 @@
           audio: false
         });
         video.srcObject = stream;
+        // v0.4.1.3: stash the stream for MediaRecorder. Probe which mime
+        // type the browser actually supports. iOS Safari typically prefers
+        // mp4/avc1; older Chrome/Firefox use webm/vp8; we try in that order
+        // and fall back to default if neither claims support. If nothing
+        // works, mediaRecorderSupported stays false and the rest of the
+        // app behaves identically to v0.4.1.2 — video save is purely
+        // additive.
+        cameraStream = stream;
+        if (typeof MediaRecorder !== 'undefined') {
+          const candidates = [
+            'video/mp4;codecs=avc1',
+            'video/mp4',
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm'
+          ];
+          for (const mime of candidates) {
+            if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(mime)) {
+              mediaRecorderMimeType = mime;
+              mediaRecorderSupported = true;
+              break;
+            }
+          }
+          if (!mediaRecorderSupported) {
+            // try default (no mime) as a last resort
+            try {
+              const probe = new MediaRecorder(stream);
+              mediaRecorderSupported = true;
+              mediaRecorderMimeType = probe.mimeType || '';
+              probe.stop();
+            } catch (_) { /* unsupported */ }
+          }
+          console.log(`[v0.4.1.3] MediaRecorder supported: ${mediaRecorderSupported}, mime: ${mediaRecorderMimeType || '(default)'}`);
+        }
         await new Promise((resolve) => {
           video.onloadedmetadata = () => { video.play(); resolve(); };
         });
@@ -3187,6 +3356,26 @@
       recBorder.classList.add('active');
       status.textContent = `Recording… (auto-stops in ${(RECORDING_DURATION_MS/1000).toFixed(0)}s)`;
 
+      // v0.4.1.3: video capture. Spin up a fresh MediaRecorder for this
+      // swing, capturing chunks into currentVideoChunks. The blob gets
+      // assembled in the recorder's onstop handler (set up below). Skip
+      // entirely if the browser doesn't support recording — the rest of
+      // the flow continues exactly as v0.4.1.2.
+      currentVideoChunks = [];
+      if (mediaRecorderSupported && cameraStream) {
+        try {
+          const opts = mediaRecorderMimeType ? { mimeType: mediaRecorderMimeType } : {};
+          mediaRecorder = new MediaRecorder(cameraStream, opts);
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) currentVideoChunks.push(e.data);
+          };
+          mediaRecorder.start();
+        } catch (e) {
+          console.warn('[v0.4.1.3] MediaRecorder failed to start:', e);
+          mediaRecorder = null;
+        }
+      }
+
       // v0.2.1: auto-stop the recording. This is what makes the session hands-free.
       // Tap Stop still works — it fires stopRecording early and clears the timer.
       if (recordingAutoStopTimer) clearTimeout(recordingAutoStopTimer);
@@ -3211,6 +3400,23 @@
       recBorder.classList.remove('active');
       status.textContent = 'Analyzing…';
       debug.textContent = '';
+
+      // v0.4.1.3: stop video capture. The recorder's chunks get assembled
+      // into a blob; we attach it to a stash slot that showResult picks up
+      // when it pushes the swing onto sessionSwings. We do NOT block on
+      // recorder.stop() — analyze() runs in parallel; the video blob is
+      // small enough (~3-5 MB) that it'll be ready by the time the user
+      // taps "Next swing" on the result panel. If the recorder is mid-
+      // assembly when sessionSwings.push happens, we attach the blob
+      // retroactively via the recorder's onstop event.
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        try {
+          mediaRecorder.stop();
+        } catch (e) {
+          console.warn('[v0.4.1.3] MediaRecorder failed to stop:', e);
+        }
+      }
+
       setTimeout(analyze, 50);
     }
 
@@ -3678,7 +3884,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.2',
+        version: '0.4.1.3',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -3728,12 +3934,49 @@
         addressIdx, topIdx, impactIdx, finishIdx,
         wristY: isComplete ? wristY.slice() : null,
         frames: lastAnalysis.frames,
+        // v0.4.1.3: video blob for ground-truth debugging. Populated by the
+        // MediaRecorder onstop handler below — may be null if recording
+        // wasn't supported, or briefly null if the recorder hasn't finished
+        // assembling. The "Download videos" button on the review screen
+        // skips records where videoBlob is null.
+        videoBlob: null,
+        videoMimeType: mediaRecorderMimeType || '',
         // Spread drill-specific extras (e.g. tempo: ratio/backswingMs/downswingMs).
         // These become first-class fields on the swing record without plumbing
         // knowing the drill.
         ...(extra || {})
       };
       sessionSwings.push(swingRecord);
+
+      // v0.4.1.3: wire the MediaRecorder's onstop event to backfill the
+      // video blob into the record we just pushed. The recorder was started
+      // in beginRecording(), stopped in stopRecording(); by the time we get
+      // here it may already be 'inactive' (chunks ready) or still flushing.
+      // Either way, set onstop to assemble the blob and patch swingRecord.
+      // We capture swingRecord by closure so even if more swings are pushed
+      // before this recorder finishes, we patch the right one.
+      if (mediaRecorder) {
+        const targetRecord = swingRecord;
+        const chunksAtTime = currentVideoChunks;  // capture array reference
+        const mimeType = mediaRecorderMimeType || 'video/mp4';
+        const finalize = () => {
+          if (chunksAtTime.length > 0) {
+            try {
+              const blob = new Blob(chunksAtTime, { type: mimeType });
+              targetRecord.videoBlob = blob;
+              targetRecord.videoSizeBytes = blob.size;
+            } catch (e) {
+              console.warn('[v0.4.1.3] Failed to assemble video blob:', e);
+            }
+          }
+        };
+        if (mediaRecorder.state === 'inactive') {
+          // Already stopped — chunks should be flushed; finalize now.
+          finalize();
+        } else {
+          mediaRecorder.onstop = finalize;
+        }
+      }
 
       // v0.2.1: enter the 'waiting' state — recognition listens for shape
       // words OR "ready" to start the next swing. This is what makes the
@@ -3904,8 +4147,21 @@
       exportSessionRawJSON();
     });
 
+    // v0.4.1.3: download all captured videos as separate files. Filenames
+    // match swing numbers in the JSON (swing-01.mp4, swing-02.mp4, ...) so
+    // they correlate to the same-session JSON. We download sequentially
+    // with a small delay between each — Safari can choke on simultaneous
+    // download triggers.
+    reviewExportVideosBtn.addEventListener('click', () => {
+      exportSessionVideos();
+    });
+
     reviewDiscardBtn.addEventListener('click', () => {
       // Drop in-memory session data. No persistence (IndexedDB is v0.3.4).
+      // v0.4.1.3: video blobs are part of sessionSwings — clearing the array
+      // releases them for garbage collection. (URL.revokeObjectURL is only
+      // needed for blobs we made createObjectURL handles for; we do that
+      // inside exportSessionVideos and revoke immediately after.)
       sessionConfig = null;
       sessionSwings = [];
       lastAnalysis = null;
