@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.0</title>
+  <title>Golf Coach — v0.4.1</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -307,7 +307,9 @@
       letter-spacing: -0.02em;
     }
     #result-value.good  { color: var(--accent); }
-    #result-value.off   { color: var(--warn); }
+    #result-value.off,
+    #result-value.below,
+    #result-value.above { color: var(--warn); }
     #result-value.error { color: var(--error); }
 
     /* Plain-language comment line. Empty (zero height) when nothing to add.
@@ -322,7 +324,9 @@
       line-height: 1.25;
     }
     #result-comment.good  { color: var(--accent); }
-    #result-comment.off   { color: var(--warn); }
+    #result-comment.off,
+    #result-comment.below,
+    #result-comment.above { color: var(--warn); }
     #result-comment.error { color: var(--error); }
     #result-comment:empty { display: none; }
 
@@ -642,16 +646,30 @@
     }
 
     /* Drill tile (selected state is the default; only one drill today) */
+    /* v0.4.1: drill picker layout — vertical stack of tiles. */
+    #drill-picker {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
     .drill-tile {
       display: flex;
       align-items: center;
       gap: 12px;
       padding: 14px 16px;
-      background: rgba(155, 197, 61, 0.08);
-      border: 2px solid var(--accent);
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(138, 135, 120, 0.35);
       border-radius: 12px;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .drill-tile.selected {
+      background: rgba(155, 197, 61, 0.08);
+      border-color: var(--accent);
+      border-width: 2px;
+      /* compensate for the 2px border so layout doesn't shift on selection */
+      padding: 13px 15px;
     }
     .drill-tile:active { background: rgba(155, 197, 61, 0.18); }
 
@@ -659,8 +677,14 @@
       width: 14px;
       height: 14px;
       border-radius: 50%;
-      background: var(--accent);
+      background: transparent;
+      border: 2px solid rgba(138, 135, 120, 0.5);
       flex-shrink: 0;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .drill-tile.selected .drill-tile-bullet {
+      background: var(--accent);
+      border-color: var(--accent);
     }
 
     .drill-tile-text {
@@ -680,16 +704,8 @@
       color: var(--dim);
     }
 
-    .drill-tile-placeholder {
-      padding: 12px 16px;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px dashed rgba(138, 135, 120, 0.35);
-      border-radius: 12px;
-      color: var(--dim);
-      font-size: 13px;
-      font-style: italic;
-      text-align: center;
-    }
+    /* v0.4.1: drill-tile-placeholder CSS removed — was the "more drills
+       coming soon" pill; now we have real drill tiles. */
 
     /* Start-screen toggle rows — same visual as in-session but packed tighter */
     .start-toggle-row {
@@ -810,8 +826,10 @@
       font-variant-numeric: tabular-nums;
     }
 
-    .review-table tr.good td:first-child { border-left: 3px solid var(--accent); padding-left: 8px; }
-    .review-table tr.off  td:first-child { border-left: 3px solid var(--warn); padding-left: 8px; }
+    .review-table tr.good td:first-child  { border-left: 3px solid var(--accent); padding-left: 8px; }
+    .review-table tr.off td:first-child,
+    .review-table tr.below td:first-child,
+    .review-table tr.above td:first-child { border-left: 3px solid var(--warn); padding-left: 8px; }
     .review-table tr.error td:first-child { border-left: 3px solid var(--error); padding-left: 8px; }
 
     .review-actions {
@@ -886,14 +904,25 @@
     <!-- v0.3.1: start screen — landing page, drill picker, toggles -->
     <div id="start-screen">
       <div class="start-section-label">Today's practice</div>
-      <div id="drill-tile" class="drill-tile" role="button" tabindex="0" aria-selected="true">
-        <div class="drill-tile-bullet"></div>
-        <div class="drill-tile-text">
-          <div class="drill-tile-title">Tempo</div>
-          <div class="drill-tile-desc">Backswing-to-downswing ratio (target ~3:1)</div>
+      <!-- v0.4.1: real drill picker. Tiles are selectable; the picker
+           reads sessionConfig.drill from the data-drill-id attribute of
+           the tile that has class="selected" when Start session fires. -->
+      <div id="drill-picker">
+        <div class="drill-tile selected" data-drill-id="tempo" role="button" tabindex="0" aria-selected="true">
+          <div class="drill-tile-bullet"></div>
+          <div class="drill-tile-text">
+            <div class="drill-tile-title">Tempo</div>
+            <div class="drill-tile-desc">Backswing-to-downswing ratio (target ~3:1)</div>
+          </div>
+        </div>
+        <div class="drill-tile" data-drill-id="head_stability" role="button" tabindex="0" aria-selected="false">
+          <div class="drill-tile-bullet"></div>
+          <div class="drill-tile-text">
+            <div class="drill-tile-title">Head stability</div>
+            <div class="drill-tile-desc">How still your head stays during the swing</div>
+          </div>
         </div>
       </div>
-      <div class="drill-tile-placeholder">More drills coming soon</div>
 
       <div class="start-section-label" style="margin-top: 6px;">Session settings</div>
       <div class="start-toggle-row">
@@ -1031,7 +1060,72 @@
 
   <script>
     // ============================================================
-    // Golf Coach v0.4.0
+    // Golf Coach v0.4.1
+    //
+    // Two changes from v0.4.0:
+    //
+    //   + DIRECTIONAL VERDICT VOCABULARY for tempo. The verdict-class system
+    //     gains 'below' and 'above' alongside 'good' and 'error'. Tempo's
+    //     binary good/off/error becomes good/below/above/error. Spoken
+    //     vocabulary changes from "in range / a little off / no swing" to
+    //     "on / below / above / no swing" — same word count, more
+    //     informative because it tells the user which direction the ratio
+    //     deviated. Range-friendly: hearing "on / below / on / on / above"
+    //     across a session tells the golfer something useful that "a little
+    //     off / a little off / a little off" never could.
+    //     Plumbing gains 'below' and 'above' as known classes (default
+    //     colored amber, same as 'off'). Drills can use any subset.
+    //
+    //   + HEAD STABILITY DRILL added as DRILLS.head_stability. Algorithm
+    //     per head_stability_algorithm_sketch.md (April 27 lock):
+    //     swing-window-only measurement, single-frame address reference at
+    //     P1, lateral and vertical nose displacement reported separately
+    //     in inches via shoulder-width scaling (16 in assumed). Verdict =
+    //     worse-of-two-axes against bands locked from real data:
+    //     <2 in good, 2–6 in good, 6–9 in off, >9 in off (verbosely:
+    //     "very still / steady / head moved / head moved a lot"). The two
+    //     "good" bands and the two "off" bands differ in panel comment
+    //     text, not verdict class — keeps the spoken vocabulary tight.
+    //
+    //   + DRILL PICKER on the start screen. Two tiles ('Tempo', 'Head
+    //     stability'). Tap to select. The selected tile's id is written to
+    //     sessionConfig.drill at session start. No camera-angle picker yet
+    //     — both v0.4.1 drills are face-on, so the angle UI would be
+    //     vestigial. Angle picker arrives with a down-the-line drill
+    //     (planned: hip lead, v0.4.2+).
+    //
+    // What does NOT change:
+    //   - Capture pipeline, segmentation, hands-free loop, TTS, voice
+    //     unchanged. v0.4.0's plumbing is the proof of concept; v0.4.1 is
+    //     the proof of usability.
+    //   - Tempo's analysis logic is identical to v0.4.0; only the verdict
+    //     CLASS labels change ('off' → 'below'/'above'). Ratios reported,
+    //     thresholds (2.5–3.5 = good band), and CSV columns are unchanged.
+    //   - JSON dump format unchanged (drill-agnostic).
+    //   - Existing v0.4.0 sessions remain readable; verdict_class column
+    //     in their CSV will show 'off' values where v0.4.1 sessions show
+    //     'below' or 'above'.
+    //
+    // Architectural changes worth noting:
+    //   - The seam from v0.4.0 held up. Adding head stability required
+    //     writing a single DRILLS.head_stability block; ZERO plumbing
+    //     changes were needed except for adding the drill picker. The
+    //     verdict-class extension was an opportunistic improvement, not
+    //     a forced refactor.
+    //   - The plumbing-vs-drill API is *more* stable than the v0.4.0 brief
+    //     warned. We may stabilise sooner than drill #4. (Don't celebrate
+    //     yet — head stability is the easy second drill; hip lead with
+    //     down-the-line camera is the hard one that'll really test the
+    //     seam.)
+    //
+    // Known polish items deferred:
+    //   - User shoulder-width calibration (currently hardcoded 16 in).
+    //   - Camera-angle picker (waits for first down-the-line drill).
+    //   - Per-gate (P4/P7/P10) head-displacement readings on the result
+    //     panel — algorithm computes them; UI only shows peak. v0.4.1.x.
+    //
+    // ============================================================
+    // Golf Coach v0.4.0 (kept for reference — behavior below still applies)
     //
     // Architectural release — no new user-facing functionality. Tempo still
     // works exactly as before. The internal code is reshaped to make the
@@ -1434,14 +1528,23 @@
       description: 'Backswing-to-downswing ratio. Tour average ~3:1.',
       supportedAngles: ['faceOn', 'downTheLine'],
 
-      // Verdict copy maps. 'good'/'off'/'error' are universal verdict
-      // classes; the SPECIFIC verdict strings are tempo's vocabulary.
+      // v0.4.1: verdict-class vocabulary expanded from binary good/off/error
+      // to directional good/below/above/error. Reasoning: hearing "a little
+      // off" 30 times in a row across a session is uninformative; "below"
+      // and "above" tell you which direction without overclaiming about
+      // cause (we measure a ratio — we don't actually know whether it's
+      // the backswing being fast or the downswing being slow). Three classes
+      // plus error covers the directional case without splitting into
+      // "slightly below / way below" — the headline ratio number already
+      // communicates magnitude.
       verdictCommentMap: {
-        // 'off' — specific shape of the miss
-        'Backswing too fast':   'Backswing too fast',
-        'Downswing too slow':   'Downswing too slow',
-        'A little off 3:1':     'A little off 3:1',
-        // 'error' — friendlier plain-language rewrite
+        // Core directional verdicts. The verdict string is intentionally
+        // the same as the spoken phrase, just title-cased — keeps things
+        // simple. The headline number ("1.7:1") tells the user how far off.
+        'On':                   '',
+        'Below':                'Below 3:1',
+        'Above':                'Above 3:1',
+        // Error verdicts — friendlier plain-language rewrite for panel
         'Incomplete swing':     'Couldn’t detect a complete swing',
         'No swing detected':    'Couldn’t detect a swing',
         'Too short':            'Recording was too short',
@@ -1450,11 +1553,14 @@
         'No pose detected':     'Couldn’t see the golfer'
       },
 
-      // Map verdictClass → spoken phrase. Spoken vocabulary is deliberately
-      // tiny (3 phrases) for instant range-side parsing.
+      // Map verdictClass → spoken phrase. v0.4.1: four-word vocabulary
+      // ("on" / "below" / "above" / "no swing"). Range-friendly, drill-
+      // portable. Other drills can use any subset of these classes; classes
+      // a drill doesn't need just don't appear in its analyze() output.
       spokenForClass: {
-        good:  'in range',
-        off:   'a little off',
+        good:  'on',
+        below: 'below',
+        above: 'above',
         error: 'no swing'
       },
 
@@ -1462,22 +1568,6 @@
       // context (frames, wristY trace, four phase indices, smoothed trace,
       // peak-detection diagnostics). Returns a result object the plumbing
       // renders.
-      //
-      // ctx = {
-      //   frames, smoothed, wristY (clipped),
-      //   addressIdx, topIdx, impactIdx, finishIdx,    // canonical, segmenter-produced
-      //   cAddress, cTop, cImpact, cFinish,             // clipped-window indices
-      //   tAddress, beepTime, fps, totalMs, clippedDurationMs,
-      //   rawPeaks, mergedPeaks,
-      //   warnings,
-      //   cameraAngle                                   // v0.4.0
-      // }
-      //
-      // returns {
-      //   value, verdict, verdictClass,
-      //   diag, warnings,
-      //   extra: { ratio, backswingMs, downswingMs }    // for sessionSwings + CSV
-      // }
       analyze: function(ctx) {
         const { frames, smoothed,
                 addressIdx, topIdx, impactIdx, finishIdx,
@@ -1523,10 +1613,13 @@
           const ratio = backswingMs / downswingMs;
           ratioNum = ratio;
           value = `${ratio.toFixed(1)}:1`;
-          if (ratio < 2.0) { verdict = 'Backswing too fast'; verdictClass = 'off'; }
-          else if (ratio > 4.0) { verdict = 'Downswing too slow'; verdictClass = 'off'; }
-          else if (ratio < 2.5 || ratio > 3.5) { verdict = 'A little off 3:1'; verdictClass = 'off'; }
-          else { verdict = 'In range'; verdictClass = 'good'; }
+          // v0.4.1: directional classification. Target band is 2.5–3.5
+          // (3:1 ± 0.5). Below = ratio shorter than band; above = longer.
+          // The exact magnitude is in the headline number; classes are
+          // grouping only.
+          if (ratio < 2.5)      { verdict = 'Below'; verdictClass = 'below'; }
+          else if (ratio > 3.5) { verdict = 'Above'; verdictClass = 'above'; }
+          else                  { verdict = 'On';    verdictClass = 'good'; }
         }
 
         return {
@@ -1555,7 +1648,7 @@
           get: s => s.downswingMs != null ? String(Math.round(s.downswingMs)) : '' }
       ],
 
-      // Per-drill review-screen summary stat (one line above the chart).
+      // Per-drill review-screen summary stat.
       reviewSummary: function(swings) {
         const swingsWithRatio = swings.filter(s => typeof s.ratio === 'number' && isFinite(s.ratio));
         if (swingsWithRatio.length === 0) return '';
@@ -1573,17 +1666,284 @@
           get: s => (s.ratio != null && isFinite(s.ratio)) ? (s.ratio.toFixed(1) + ':1') : '—' }
       ],
 
-      // Per-drill review-screen distribution chart. Returns the bucket
-      // definitions; plumbing handles the canvas-drawing primitive.
-      // If a future drill doesn't implement this, plumbing hides the
-      // distribution panel for that drill.
+      // v0.4.1: distribution buckets updated to use new directional classes.
+      // Coloring matches verdictClass so the chart visually agrees with the
+      // result-panel coloring and the row-border in the table.
       distributionBuckets: [
-        { label: '<2.0',    test: s => typeof s.ratio === 'number' && s.ratio < 2.0,                            cls: 'error' },
-        { label: '2.0–2.4', test: s => typeof s.ratio === 'number' && s.ratio >= 2.0 && s.ratio < 2.5,         cls: 'off' },
+        { label: '<2.0',    test: s => typeof s.ratio === 'number' && s.ratio < 2.0,                            cls: 'below' },
+        { label: '2.0–2.4', test: s => typeof s.ratio === 'number' && s.ratio >= 2.0 && s.ratio < 2.5,         cls: 'below' },
         { label: '2.5–2.9', test: s => typeof s.ratio === 'number' && s.ratio >= 2.5 && s.ratio < 3.0,         cls: 'good' },
         { label: '3.0–3.4', test: s => typeof s.ratio === 'number' && s.ratio >= 3.0 && s.ratio < 3.5,         cls: 'good' },
-        { label: '3.5–3.9', test: s => typeof s.ratio === 'number' && s.ratio >= 3.5 && s.ratio < 4.0,         cls: 'off' },
-        { label: '≥4.0',    test: s => typeof s.ratio === 'number' && s.ratio >= 4.0,                           cls: 'error' }
+        { label: '3.5–3.9', test: s => typeof s.ratio === 'number' && s.ratio >= 3.5 && s.ratio < 4.0,         cls: 'above' },
+        { label: '≥4.0',    test: s => typeof s.ratio === 'number' && s.ratio >= 4.0,                           cls: 'above' }
+      ]
+    };
+
+    // ============================================================
+    // v0.4.1: DRILLS.head_stability — second drill, validating the seam.
+    // ============================================================
+    // Algorithm per head_stability_algorithm_sketch.md (locked April 27):
+    //
+    //   - Reference position = nose at addressIdx (P1), single frame,
+    //     post-smoothing. NOT a median over pre-address frames — those
+    //     capture the user fidgeting at setup, not swing motion.
+    //   - Measurement window = addressIdx → finishIdx (P1 → P10). Full
+    //     swing including follow-through.
+    //   - px-to-inches scale via shoulder width: median of |LSx − RSx|
+    //     across frames addressIdx-5 to addressIdx+5, then divide
+    //     ASSUMED_SHOULDER_INCHES by it. Address is the most-still moment
+    //     of the swing, so a small window around it is the safest scale ref.
+    //   - Per-frame displacement: dx (lateral, + toward target) and
+    //     dy (vertical, + head rose). In inches.
+    //   - Metrics: peakLateral = max|dx|, peakVertical = max|dy|,
+    //     combinedPeak = max of those two. Plus per-gate readings at P1
+    //     (always 0,0), P4, P7, P10 — captured in extras for JSON / CSV
+    //     analysis. Result panel shows peaks only in v0.4.1; per-gate is
+    //     v0.4.1.x or later.
+    //   - Verdict = worse-of-two-axes against bands:
+    //       combinedPeak < 2 in  → "very still" (good)
+    //       combinedPeak 2–6 in  → "steady"     (good)
+    //       combinedPeak 6–9 in  → "head moved" (off)
+    //       combinedPeak > 9 in  → "head moved a lot" (off)
+    //
+    // The verdict CLASSES are good/off/error — head stability doesn't fit
+    // the directional below/above pattern (head movement is one-sided —
+    // less is always better, never worse). This is fine; verdict classes
+    // are drill-defined, not universal.
+    DRILLS.head_stability = {
+      id: 'head_stability',
+      displayName: 'Head stability',
+      description: 'Did the head stay still through the swing?',
+      supportedAngles: ['faceOn'],
+
+      verdictCommentMap: {
+        // Two flavors of good — same class, different comment text.
+        'Very still':           '',
+        'Steady':               '',
+        // Two flavors of off — same class, different comment text.
+        'Head moved':           'Head moved during the swing',
+        'Head moved a lot':     'Head moved a lot during the swing',
+        // Errors — same as tempo's plumbing-level errors.
+        'Incomplete swing':     'Couldn’t detect a complete swing',
+        'No swing detected':    'Couldn’t detect a swing',
+        'Too short':            'Recording was too short',
+        'Recording too short':  'Recording was too short',
+        'Detection failed':     'Couldn’t read the swing',
+        'No pose detected':     'Couldn’t see the golfer'
+      },
+
+      // Spoken vocabulary kept tight. Two good-class flavors collapse to
+      // one spoken word ("steady"). Two off-class flavors also collapse to
+      // one ("moved"). The result-panel comment text differentiates if the
+      // user looks at the screen.
+      spokenForClass: {
+        good:  'steady',
+        off:   'moved',
+        error: 'no swing'
+      },
+
+      analyze: function(ctx) {
+        const { frames, addressIdx, topIdx, impactIdx, finishIdx,
+                tAddress, beepTime, fps, totalMs, clippedDurationMs,
+                warnings } = ctx;
+
+        // Helper: median of an array (assumes non-empty)
+        const median = arr => {
+          const sorted = arr.slice().sort((a, b) => a - b);
+          const m = sorted.length;
+          return m % 2 === 0 ? (sorted[m/2 - 1] + sorted[m/2]) / 2 : sorted[(m-1)/2];
+        };
+
+        // ---- Shoulder-width scale ----
+        // Window of ~11 frames centered on addressIdx. Robust to single-frame
+        // occlusions via median.
+        const ASSUMED_SHOULDER_INCHES = 16.0;
+        const winLo = Math.max(0, addressIdx - 5);
+        const winHi = Math.min(frames.length, addressIdx + 6);
+        const shoulderPxs = [];
+        for (let i = winLo; i < winHi; i++) {
+          const ls = frames[i].landmarks[LM.LEFT_SHOULDER];
+          const rs = frames[i].landmarks[LM.RIGHT_SHOULDER];
+          shoulderPxs.push(Math.abs(ls.x - rs.x));
+        }
+        const shoulderPxRef = shoulderPxs.length > 0 ? median(shoulderPxs) : 0;
+        if (shoulderPxRef <= 0) {
+          return {
+            value: '—',
+            verdict: 'Detection failed',
+            verdictClass: 'error',
+            diag: [['Frames captured', frames.length], ['Reason', 'shoulder width zero']],
+            warnings: [...(warnings || []), 'Could not determine scale from shoulder width.'],
+            extra: {}
+          };
+        }
+        const pxToIn = ASSUMED_SHOULDER_INCHES / shoulderPxRef;
+
+        // ---- Smoothed nose traces ----
+        // Reuses the plumbing-level smooth() helper. Filter null landmarks
+        // not expected for nose (visibility was 1.000 in all clean field
+        // sessions); a defensive fallback uses raw 0.5 if visibility is
+        // unexpectedly low.
+        const noseXRaw = frames.map(f => f.landmarks[LM.NOSE].x);
+        const noseYRaw = frames.map(f => f.landmarks[LM.NOSE].y);
+        const noseX = smooth(noseXRaw, 5);
+        const noseY = smooth(noseYRaw, 5);
+
+        // ---- Reference position at P1 (single frame, smoothed) ----
+        const refX = noseX[addressIdx];
+        const refY = noseY[addressIdx];
+
+        // ---- Per-frame displacements through the swing window ----
+        // dx in inches, + = toward target (lead side). dy in inches, +
+        // = head rose (we negate the image-coord delta because image-y
+        // increases downward).
+        let peakLateral = 0;
+        let peakLateralSigned = 0;
+        let peakVertical = 0;
+        let peakVerticalSigned = 0;
+        for (let i = addressIdx; i <= finishIdx; i++) {
+          const dx = (noseX[i] - refX) * pxToIn;
+          const dy = -(noseY[i] - refY) * pxToIn;
+          if (Math.abs(dx) > peakLateral)  { peakLateral  = Math.abs(dx); peakLateralSigned  = dx; }
+          if (Math.abs(dy) > peakVertical) { peakVertical = Math.abs(dy); peakVerticalSigned = dy; }
+        }
+        const combinedPeak = Math.max(peakLateral, peakVertical);
+
+        // ---- Per-gate readings (P1, P4, P7, P10) ----
+        // Stored in extras for JSON/CSV analysis. P1 is always (0,0) by
+        // definition. v0.4.1 panel shows peaks only.
+        const gateAt = (idx) => ({
+          dx: (noseX[idx] - refX) * pxToIn,
+          dy: -(noseY[idx] - refY) * pxToIn
+        });
+        const p1 = gateAt(addressIdx);
+        const p4 = gateAt(topIdx);
+        const p7 = gateAt(impactIdx);
+        const p10 = gateAt(finishIdx);
+
+        // ---- Verdict classification ----
+        // Bands locked from April 27 13:00 CEST session. Edges are
+        // soft — see brief Open Questions for "lock thresholds when more
+        // testers use the app."
+        let verdict, verdictClass;
+        if (combinedPeak < 2)      { verdict = 'Very still';        verdictClass = 'good'; }
+        else if (combinedPeak < 6) { verdict = 'Steady';            verdictClass = 'good'; }
+        else if (combinedPeak < 9) { verdict = 'Head moved';        verdictClass = 'off'; }
+        else                       { verdict = 'Head moved a lot';  verdictClass = 'off'; }
+
+        // ---- Result value (panel headline) ----
+        // Two numbers, signed for direction. Format chosen to fit the existing
+        // headline CSS (clamp(64px, 20vw, 128px)) which is sized for a single
+        // word/number — two short numbers separated by a center dot fits.
+        const value =
+          `${peakLateralSigned >= 0 ? '+' : '−'}${peakLateral.toFixed(1)}″`
+          + ' · '
+          + `${peakVerticalSigned >= 0 ? '+' : '−'}${peakVertical.toFixed(1)}″`;
+        // Note: the dot+space looks cleaner than a slash on small screens.
+        // Sign convention: + lateral = toward target, − lateral = away.
+        // + vertical = head rose, − vertical = head dropped.
+
+        const diag = [
+          ['Frames captured', frames.length],
+          ['Recording duration', `${(totalMs/1000).toFixed(2)} s`],
+          ['Effective FPS', fps.toFixed(1)],
+          ['Beep → motion onset', `${(tAddress - beepTime).toFixed(0)} ms`],
+          ['Address (P1)', `frame ${addressIdx}`],
+          ['Top (P4)', `frame ${topIdx}`],
+          ['Impact (P7)', `frame ${impactIdx}`],
+          ['Finish (P10)', `frame ${finishIdx}`],
+          ['Shoulder width (px)', shoulderPxRef.toFixed(4)],
+          ['Scale', `${pxToIn.toFixed(1)} px/in`],
+          ['Lateral peak', `${peakLateralSigned >= 0 ? '+' : '−'}${peakLateral.toFixed(2)} in`],
+          ['Vertical peak', `${peakVerticalSigned >= 0 ? '+' : '−'}${peakVertical.toFixed(2)} in`],
+          ['Combined peak', `${combinedPeak.toFixed(2)} in`],
+          ['P4 lat / vert', `${p4.dx.toFixed(2)} / ${p4.dy.toFixed(2)} in`],
+          ['P7 lat / vert', `${p7.dx.toFixed(2)} / ${p7.dy.toFixed(2)} in`],
+          ['P10 lat / vert', `${p10.dx.toFixed(2)} / ${p10.dy.toFixed(2)} in`]
+        ];
+
+        return {
+          value,
+          verdict,
+          verdictClass,
+          diag,
+          warnings,
+          extra: {
+            // Peaks (used for verdict + most CSV/distribution).
+            lateralPeakIn: peakLateral,
+            verticalPeakIn: peakVertical,
+            lateralPeakSignedIn: peakLateralSigned,
+            verticalPeakSignedIn: peakVerticalSigned,
+            combinedPeakIn: combinedPeak,
+            // Per-gate readings (for offline analysis / future panel display).
+            // P1 is always (0,0) so we don't store it.
+            p4LateralIn: p4.dx,  p4VerticalIn: p4.dy,
+            p7LateralIn: p7.dx,  p7VerticalIn: p7.dy,
+            p10LateralIn: p10.dx, p10VerticalIn: p10.dy,
+            // Calibration trace.
+            shoulderPxRef: shoulderPxRef,
+            assumedShoulderInches: ASSUMED_SHOULDER_INCHES
+          }
+        };
+      },
+
+      // CSV: peak fields are the everyday "what happened this swing" view.
+      // Per-gate fields included for offline analysis.
+      csvColumns: [
+        { name: 'lateral_peak_in',
+          get: s => s.lateralPeakSignedIn != null ? s.lateralPeakSignedIn.toFixed(2) : '' },
+        { name: 'vertical_peak_in',
+          get: s => s.verticalPeakSignedIn != null ? s.verticalPeakSignedIn.toFixed(2) : '' },
+        { name: 'combined_peak_in',
+          get: s => s.combinedPeakIn != null ? s.combinedPeakIn.toFixed(2) : '' },
+        { name: 'p4_lateral_in',
+          get: s => s.p4LateralIn != null ? s.p4LateralIn.toFixed(2) : '' },
+        { name: 'p4_vertical_in',
+          get: s => s.p4VerticalIn != null ? s.p4VerticalIn.toFixed(2) : '' },
+        { name: 'p7_lateral_in',
+          get: s => s.p7LateralIn != null ? s.p7LateralIn.toFixed(2) : '' },
+        { name: 'p7_vertical_in',
+          get: s => s.p7VerticalIn != null ? s.p7VerticalIn.toFixed(2) : '' },
+        { name: 'p10_lateral_in',
+          get: s => s.p10LateralIn != null ? s.p10LateralIn.toFixed(2) : '' },
+        { name: 'p10_vertical_in',
+          get: s => s.p10VerticalIn != null ? s.p10VerticalIn.toFixed(2) : '' },
+        { name: 'shoulder_px_ref',
+          get: s => s.shoulderPxRef != null ? s.shoulderPxRef.toFixed(4) : '' }
+      ],
+
+      reviewSummary: function(swings) {
+        const withPeak = swings.filter(s => typeof s.combinedPeakIn === 'number' && isFinite(s.combinedPeakIn));
+        if (withPeak.length === 0) return '';
+        const peaks = withPeak.map(s => s.combinedPeakIn).sort((a, b) => a - b);
+        const median = peaks.length % 2 === 0
+          ? (peaks[peaks.length/2 - 1] + peaks[peaks.length/2]) / 2
+          : peaks[(peaks.length - 1) / 2];
+        return `median peak ${median.toFixed(1)}″`;
+      },
+
+      tableColumns: [
+        { label: 'Lat',
+          get: s => s.lateralPeakSignedIn != null
+                    ? ((s.lateralPeakSignedIn >= 0 ? '+' : '−') + Math.abs(s.lateralPeakSignedIn).toFixed(1) + '″')
+                    : '—' },
+        { label: 'Vert',
+          get: s => s.verticalPeakSignedIn != null
+                    ? ((s.verticalPeakSignedIn >= 0 ? '+' : '−') + Math.abs(s.verticalPeakSignedIn).toFixed(1) + '″')
+                    : '—' },
+        { label: 'Peak',
+          get: s => s.combinedPeakIn != null ? (s.combinedPeakIn.toFixed(1) + '″') : '—' }
+      ],
+
+      // Distribution buckets in inches. Bucket edges align with verdict
+      // edges so the chart visually agrees with the per-swing coloring.
+      distributionBuckets: [
+        { label: '<1″',    test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn < 1,                                    cls: 'good' },
+        { label: '1–2″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 1 && s.combinedPeakIn < 2,          cls: 'good' },
+        { label: '2–4″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 2 && s.combinedPeakIn < 4,          cls: 'good' },
+        { label: '4–6″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 4 && s.combinedPeakIn < 6,          cls: 'good' },
+        { label: '6–9″',   test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 6 && s.combinedPeakIn < 9,          cls: 'off' },
+        { label: '≥9″',    test: s => typeof s.combinedPeakIn === 'number' && s.combinedPeakIn >= 9,                                   cls: 'off' }
       ]
     };
 
@@ -1837,6 +2197,8 @@
       const colorFor = {
         good: getCssVar('--accent') || '#9bc53d',
         off:  getCssVar('--warn')   || '#e5a823',
+        below: getCssVar('--warn')  || '#e5a823',
+        above: getCssVar('--warn')  || '#e5a823',
         error: getCssVar('--error') || '#d95f43'
       };
       const dim = getCssVar('--dim') || '#8a8778';
@@ -2034,7 +2396,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.0',
+        version: '0.4.1',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3100,7 +3462,7 @@
       // phrase is drill-defined — tempo says "in range / a little off /
       // no swing"; head stability will say different words.
       const spokenForClass = (drill && drill.spokenForClass) || {
-        good: 'in range', off: 'a little off', error: 'no swing'
+        good: 'on', below: 'below', above: 'above', off: 'a little off', error: 'no swing'
       };
       const spokenPhrase = spokenForClass[verdictClass] || spokenForClass.error;
       speak(spokenPhrase);
@@ -3157,7 +3519,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.0',
+        version: '0.4.1',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -3330,10 +3692,36 @@
     // flips into session mode. voiceEnabled/shapeEnabled are already being
     // kept in sync with the toggles by their own handlers, so we just
     // snapshot them here. Per spec (Group C #9), nothing is persisted.
+    // v0.4.1: drill picker. Tap a tile to select it; selection visual is
+    // a class swap. The selected tile's data-drill-id is read at session
+    // start. Default selection (Tempo) is set in the DOM via the .selected
+    // class, so this just maintains it.
+    document.querySelectorAll('.drill-tile').forEach(tile => {
+      const select = () => {
+        document.querySelectorAll('.drill-tile').forEach(t => {
+          t.classList.remove('selected');
+          t.setAttribute('aria-selected', 'false');
+        });
+        tile.classList.add('selected');
+        tile.setAttribute('aria-selected', 'true');
+      };
+      tile.addEventListener('click', select);
+      tile.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); select(); }
+      });
+    });
+
+    // v0.4.0: Start session — builds sessionConfig from current toggle state and
+    // flips into session mode. voiceEnabled/shapeEnabled are already being
+    // kept in sync with the toggles by their own handlers, so we just
+    // snapshot them here. Per spec (Group C #9), nothing is persisted.
     startSessionBtn.addEventListener('click', () => {
       ensureAudio();
+      // v0.4.1: read drill from the selected tile.
+      const selectedTile = document.querySelector('.drill-tile.selected');
+      const drillId = (selectedTile && selectedTile.dataset.drillId) || 'tempo';
       sessionConfig = {
-        drill: 'tempo',                  // future: derived from selected drill tile
+        drill: drillId,
         cameraAngle: 'faceOn',           // v0.4.0: only face-on supported in v0.4.x
                                          //         drill registry's supportedAngles list
                                          //         filters which drills are pickable per angle
