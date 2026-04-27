@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.3.3</title>
+  <title>Golf Coach — v0.4.0</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -943,15 +943,9 @@
       <div class="review-section" id="review-table-section">
         <div class="review-section-title">Swings</div>
         <table class="review-table" id="review-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Back (ms)</th>
-              <th>Down (ms)</th>
-              <th>Ratio</th>
-              <th>Shape</th>
-            </tr>
-          </thead>
+          <!-- v0.4.0: thead built dynamically by renderSwingTable from
+               universal columns + drill.tableColumns -->
+          <thead id="review-table-head"></thead>
           <tbody id="review-table-body"></tbody>
         </table>
       </div>
@@ -1077,6 +1071,18 @@
     //   - JSON dump format unchanged (drill-agnostic already).
     //   - Head-stability drill is NOT in this release. v0.4.1 adds it as
     //     the first real test of the new seam.
+    //
+    // Release checklist for future versions — places to bump the version
+    // string (this list discovered the hard way: the <title> tag was stale
+    // for four releases until April 27 noticed it):
+    //   1. <title> tag at the top of <head> — visible in browser tab
+    //   2. lastAnalysis.version in analyze() — appears in per-swing JSON
+    //   3. exportSessionRawJSON's payload.version — appears in session JSON
+    //   4. The version comment block here at the top of the script
+    //   5. The brief's "Current state" header and Last-updated line
+    //   (NB: the user-facing app does not display the version anywhere
+    //    other than the browser tab, so the title tag is the one humans
+    //    actually see during sessions.)
     //
     // Architectural principles being committed to (from brief v3):
     //   - Plumbing serves drills; drills do not serve plumbing.
@@ -1633,6 +1639,7 @@
     const reviewAvgSection = document.getElementById('review-avg-section');
     const reviewAvgEmpty = document.getElementById('review-avg-empty');
     const reviewTableBody = document.getElementById('review-table-body');
+    const reviewTableHead = document.getElementById('review-table-head');
     const reviewTableSection = document.getElementById('review-table-section');
     const reviewDistSection = document.getElementById('review-dist-section');
     const reviewEmptyState = document.getElementById('review-empty-state');
@@ -1751,20 +1758,25 @@
       reviewExportBtn.style.display = '';
 
       // --- Aggregate summary -------------------------------------------
+      // v0.4.0: drill provides its own summary stat (e.g. tempo: "avg
+      // tempo 3.1:1"; head stability: "median peak 4.2 in"). Plumbing
+      // computes the universal stats (count, % in range) and appends.
+      const drill = getCurrentDrill();
       const goodCount = swings.filter(s => s.verdictClass === 'good').length;
       const pctInRange = Math.round((goodCount / n) * 100);
-      const swingsWithRatio = swings.filter(s => typeof s.ratio === 'number' && isFinite(s.ratio));
-      let avgText = '';
-      if (swingsWithRatio.length > 0) {
-        const sum = swingsWithRatio.reduce((a, s) => a + s.ratio, 0);
-        const mean = sum / swingsWithRatio.length;
-        avgText = ` · avg tempo ${mean.toFixed(1)}:1`;
-      }
+      const drillStat = (drill && drill.reviewSummary) ? drill.reviewSummary(swings) : '';
+      const drillStatPart = drillStat ? ` · ${drillStat}` : '';
       const label = n === 1 ? 'swing' : 'swings';
-      reviewSummary.textContent = `${n} ${label} · ${pctInRange}% in range${avgText}`;
+      reviewSummary.textContent = `${n} ${label} · ${pctInRange}% in range${drillStatPart}`;
 
       // --- Distribution chart ------------------------------------------
-      drawDistributionChart(swingsWithRatio);
+      // v0.4.0: hide section if drill doesn't define distributionBuckets.
+      if (drill && Array.isArray(drill.distributionBuckets) && drill.distributionBuckets.length > 0) {
+        reviewDistSection.style.display = '';
+        drawDistributionChart(swings);
+      } else {
+        reviewDistSection.style.display = 'none';
+      }
 
       // --- Average swing shape -----------------------------------------
       // Need swings that have a full W (address/top/impact/finish all set)
@@ -1792,16 +1804,18 @@
     }
 
     // v0.3.3: distribution chart. Six buckets for the tempo ratio.
-    function drawDistributionChart(swingsWithRatio) {
-      const BUCKETS = [
-        { label: '<2.0',    test: r => r < 2.0,               cls: 'error' },
-        { label: '2.0–2.4', test: r => r >= 2.0 && r < 2.5,   cls: 'off' },
-        { label: '2.5–2.9', test: r => r >= 2.5 && r < 3.0,   cls: 'good' },
-        { label: '3.0–3.4', test: r => r >= 3.0 && r < 3.5,   cls: 'good' },
-        { label: '3.5–3.9', test: r => r >= 3.5 && r < 4.0,   cls: 'off' },
-        { label: '≥4.0',    test: r => r >= 4.0,              cls: 'error' }
-      ];
-      const counts = BUCKETS.map(b => swingsWithRatio.filter(s => b.test(s.ratio)).length);
+    // v0.4.0: distribution chart now reads buckets from the active drill.
+    // Drills provide `distributionBuckets: [{label, test(swing), cls}, ...]`
+    // — the test function operates on a full swing record so different drills
+    // can route off different fields (tempo: ratio; head stability: combined
+    // peak; etc.). If a drill omits `distributionBuckets`, plumbing hides the
+    // chart panel for that drill.
+    function drawDistributionChart(swings) {
+      const drill = getCurrentDrill();
+      const BUCKETS = (drill && drill.distributionBuckets) || [];
+      if (BUCKETS.length === 0) return;
+
+      const counts = BUCKETS.map(b => swings.filter(s => b.test(s)).length);
       const maxCount = Math.max(1, ...counts);
 
       const canvas = reviewDistCanvas;
@@ -1919,8 +1933,25 @@
       ctx.fillText('Finish', padL + plotW, padT + plotH + 14);
     }
 
-    // v0.3.3: per-swing table. One row per swing, coloured by verdictClass.
+    // v0.4.0: per-swing table is drill-aware. Universal columns (# and
+    // Shape) are always present. The drill provides extra columns via its
+    // `tableColumns` array — each entry is {label, get(swing) → string}.
     function renderSwingTable(swings) {
+      const drill = getCurrentDrill();
+      const drillCols = (drill && Array.isArray(drill.tableColumns)) ? drill.tableColumns : [];
+
+      // Header. Universal-leading: '#'. Drill columns next. Universal-trailing: 'Shape'.
+      reviewTableHead.innerHTML = '';
+      const headRow = document.createElement('tr');
+      const labels = ['#', ...drillCols.map(c => c.label), 'Shape'];
+      for (const lbl of labels) {
+        const th = document.createElement('th');
+        th.textContent = lbl;
+        headRow.appendChild(th);
+      }
+      reviewTableHead.appendChild(headRow);
+
+      // Body. Same column order, per swing.
       reviewTableBody.innerHTML = '';
       for (let i = 0; i < swings.length; i++) {
         const s = swings[i];
@@ -1928,9 +1959,7 @@
         if (s.verdictClass) tr.className = s.verdictClass;
         const cells = [
           String(i + 1),
-          s.backswingMs != null ? String(Math.round(s.backswingMs)) : '—',
-          s.downswingMs != null ? String(Math.round(s.downswingMs)) : '—',
-          (s.ratio != null && isFinite(s.ratio)) ? (s.ratio.toFixed(1) + ':1') : '—',
+          ...drillCols.map(c => c.get(s)),
           s.shape || '—'
         ];
         for (const c of cells) {
@@ -1952,26 +1981,37 @@
     // the per-swing Save Raw Data in the debug view.
     function exportSessionCSV() {
       if (sessionSwings.length === 0) return;
-      const header = [
-        'swing_number','timestamp','drill','verdict','verdict_class',
-        'ratio','backswing_ms','downswing_ms','shape',
+      // v0.4.0: CSV is now drill-aware. Universal core columns are
+      // captured per swing regardless of which drill ran. Drill-specific
+      // columns are appended from drill.csvColumns. Mixed-drill sessions
+      // (not yet possible — we only run one drill per session — but
+      // architecturally allowed) would result in a wide CSV with empty
+      // cells where the drill differs.
+      const drill = getCurrentDrill();
+      const drillCols = (drill && Array.isArray(drill.csvColumns)) ? drill.csvColumns : [];
+      const universalHeader = [
+        'swing_number','timestamp','drill','camera_angle',
+        'verdict','verdict_class','shape',
         'address_idx','top_idx','impact_idx','finish_idx'
       ];
-      const rows = sessionSwings.map((s, i) => [
-        i + 1,
-        s.timestamp || '',
-        s.drill || '',
-        csvEscape(s.verdict || ''),
-        s.verdictClass || '',
-        (s.ratio != null && isFinite(s.ratio)) ? s.ratio.toFixed(2) : '',
-        s.backswingMs != null ? Math.round(s.backswingMs) : '',
-        s.downswingMs != null ? Math.round(s.downswingMs) : '',
-        csvEscape(s.shape || ''),
-        s.addressIdx != null ? s.addressIdx : '',
-        s.topIdx != null ? s.topIdx : '',
-        s.impactIdx != null ? s.impactIdx : '',
-        s.finishIdx != null ? s.finishIdx : ''
-      ]);
+      const header = [...universalHeader, ...drillCols.map(c => c.name)];
+      const rows = sessionSwings.map((s, i) => {
+        const universal = [
+          i + 1,
+          s.timestamp || '',
+          s.drill || '',
+          s.cameraAngle || 'faceOn',
+          csvEscape(s.verdict || ''),
+          s.verdictClass || '',
+          csvEscape(s.shape || ''),
+          s.addressIdx != null ? s.addressIdx : '',
+          s.topIdx != null ? s.topIdx : '',
+          s.impactIdx != null ? s.impactIdx : '',
+          s.finishIdx != null ? s.finishIdx : ''
+        ];
+        const drillCells = drillCols.map(c => csvEscape(c.get(s) || ''));
+        return [...universal, ...drillCells];
+      });
       const csv = [header.join(','), ...rows.map(r => r.join(','))].join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -1994,7 +2034,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.3.3.3',
+        version: '0.4.0',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -2007,24 +2047,38 @@
               shapeEnabled: sessionConfig.shapeEnabled
             }
           : null,
-        swings: sessionSwings.map((s, i) => ({
-          swingNumber: i + 1,
-          timestamp: s.timestamp || null,
-          drill: s.drill || null,
-          verdict: s.verdict || null,
-          verdictClass: s.verdictClass || null,
-          value: s.value != null ? s.value : null,
-          ratio: (s.ratio != null && isFinite(s.ratio)) ? s.ratio : null,
-          backswingMs: s.backswingMs != null ? s.backswingMs : null,
-          downswingMs: s.downswingMs != null ? s.downswingMs : null,
-          shape: s.shape || null,
-          addressIdx: s.addressIdx != null ? s.addressIdx : null,
-          topIdx: s.topIdx != null ? s.topIdx : null,
-          impactIdx: s.impactIdx != null ? s.impactIdx : null,
-          finishIdx: s.finishIdx != null ? s.finishIdx : null,
-          wristY: s.wristY || null,
-          frames: s.frames || []
-        }))
+        // v0.4.0: per-swing dump is drill-agnostic. Universal fields are
+        // listed explicitly; drill-specific extras (e.g. tempo's ratio,
+        // backswingMs, downswingMs; head stability's lat/vert peaks)
+        // are spread automatically via ...rest. New drills add fields by
+        // putting them on result.extra; the JSON dump captures them
+        // without modification here.
+        swings: sessionSwings.map((s, i) => {
+          const {
+            timestamp, drill, cameraAngle, verdict, verdictClass, value, shape,
+            addressIdx, topIdx, impactIdx, finishIdx, wristY, frames,
+            ...drillExtras
+          } = s;
+          return {
+            swingNumber: i + 1,
+            timestamp: timestamp || null,
+            drill: drill || null,
+            cameraAngle: cameraAngle || 'faceOn',
+            verdict: verdict || null,
+            verdictClass: verdictClass || null,
+            value: value != null ? value : null,
+            shape: shape || null,
+            addressIdx: addressIdx != null ? addressIdx : null,
+            topIdx: topIdx != null ? topIdx : null,
+            impactIdx: impactIdx != null ? impactIdx : null,
+            finishIdx: finishIdx != null ? finishIdx : null,
+            wristY: wristY || null,
+            frames: frames || [],
+            // Drill-specific extras spread in last so they don't overwrite
+            // universal fields. For tempo this is ratio/backswingMs/downswingMs.
+            ...drillExtras
+          };
+        })
       };
       const json = JSON.stringify(payload, null, 2);
       const blob = new Blob([json], { type: 'application/json' });
@@ -3103,7 +3157,7 @@
       });
 
       lastAnalysis = {
-        version: '0.3.3',
+        version: '0.4.0',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
