@@ -1990,7 +1990,9 @@
     const startScreen = document.getElementById('start-screen');
     const startSessionBtn = document.getElementById('start-session-btn');
     const endSessionBtn = document.getElementById('result-end');  // v0.3.1 patch: on result panel
-    const drillTile = document.getElementById('drill-tile');
+    // v0.4.1: drillTile DOM ref removed — the v0.3.1 single tile (#drill-tile)
+    // was replaced by the multi-tile picker (.drill-tile class). Selection
+    // logic lives further down, in the .drill-tile click handler.
     // v0.3.3 additions
     const reviewScreen = document.getElementById('review-screen');
     const reviewSummary = document.getElementById('review-summary');
@@ -3677,27 +3679,20 @@
     // v0.3.1: start-screen handlers
     // ============================================================
 
-    // Drill tile — only one drill today, so tapping is a no-op for selection
-    // (Tempo stays selected). The tap still runs ensureAudio() to unlock TTS
-    // early, per Group E #11. When drill #2 ships, this becomes a real select.
-    drillTile.addEventListener('click', () => {
-      ensureAudio();
-      // Future: flip a .selected class between multiple drill tiles here.
-    });
-    drillTile.addEventListener('keydown', (e) => {
-      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); drillTile.click(); }
-    });
+    // v0.4.1: the v0.3.1 single-tile click/keydown handlers were here.
+    // Removed — the multi-tile picker below replaces them and handles
+    // both tiles' selection + keyboard navigation.
 
-    // Start session — builds sessionConfig from current toggle state and
-    // flips into session mode. voiceEnabled/shapeEnabled are already being
-    // kept in sync with the toggles by their own handlers, so we just
-    // snapshot them here. Per spec (Group C #9), nothing is persisted.
     // v0.4.1: drill picker. Tap a tile to select it; selection visual is
     // a class swap. The selected tile's data-drill-id is read at session
     // start. Default selection (Tempo) is set in the DOM via the .selected
     // class, so this just maintains it.
     document.querySelectorAll('.drill-tile').forEach(tile => {
       const select = () => {
+        // v0.4.1: like the previous v0.3.1 single-tile handler, tapping a
+        // drill tile also runs ensureAudio() to unlock the AudioContext +
+        // TTS early on iOS Safari. Per Group E #11 of the v0.3 design.
+        ensureAudio();
         document.querySelectorAll('.drill-tile').forEach(t => {
           t.classList.remove('selected');
           t.setAttribute('aria-selected', 'false');
