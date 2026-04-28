@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.4</title>
+  <title>Golf Coach — v0.4.1.5</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -1075,6 +1075,43 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 
   <script>
+    // ============================================================
+    // Golf Coach v0.4.1.5 — EXPANDED LANDMARK EXPORT
+    //
+    // Investigation release. April 28 range session (25 swings on
+    // v0.4.1.4) revealed that the wristY-based P7 (impact) detection
+    // is unreliable on real swings: wrist L/R labels swap and
+    // landmark positions teleport during fast rotation through impact.
+    // This is a documented MediaPipe Pose limitation for high-velocity
+    // sports (it-jim.com/blog/mediapipe-for-sports-apps, Feb 2026).
+    // Visibility scores remain high during these failures — MediaPipe
+    // is confidently wrong, not uncertain.
+    //
+    // Hypothesis under test: slower-moving body parts (elbows, knees,
+    // shoulders) may produce more reliable impact signals because
+    // they don't cross the body centerline as dramatically as wrists.
+    // Shoulders are well-tracked but their L/R labels also swap mid-
+    // rotation. Elbows weren't being saved to JSON, so we couldn't
+    // test the hypothesis on April 28 data.
+    //
+    // The change in v0.4.1.5:
+    //   - Frame export now includes leftElbow / rightElbow,
+    //     leftKnee / rightKnee, leftAnkle / rightAnkle in addition
+    //     to the existing wrists, shoulders, hips, nose.
+    //   - JSON version bumped to 0.4.1.5.
+    //   - No algorithm changes. No drill changes. No UX changes.
+    //
+    // Once a session captures elbow data, offline analysis can test:
+    //   - Is elbow tracking more stable than wrist tracking through
+    //     impact?
+    //   - Does any landmark produce a clean impact signal?
+    //   - If not, we may need to redesign the drills around what we
+    //     CAN measure reliably (P1, P4, P10) rather than try to fix
+    //     impact detection in the segmenter.
+    //
+    // Cost: ~20% larger JSON per session. No runtime impact (we
+    // already had the landmarks; we just weren't persisting them).
+    //
     // ============================================================
     // Golf Coach v0.4.1.4 — JSON INDEX FIX (clip vs. absolute)
     //
@@ -2674,7 +2711,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.4',
+        version: '0.4.1.5',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3954,7 +3991,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.4',
+        version: '0.4.1.5',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -3991,12 +4028,26 @@
         chartFinishIdx: finishIdx,
         frames: frames.map(f => ({
           t: f.t,
+          // v0.4.1.5: expanded landmark set for segmenter investigation.
+          // The April 28 range session showed that wrist labels (lW vs rW)
+          // unreliably swap during fast rotation through the impact zone —
+          // a documented MediaPipe Pose limitation for high-velocity
+          // sports. Saving elbows, knees, and ankles too so we can test
+          // whether slower-moving body parts give a cleaner impact signal.
+          // No production drill consumes these yet; they're investigation
+          // data only. Cost: ~20% larger JSON, no runtime impact.
           leftWrist: f.landmarks[LM.LEFT_WRIST],
           rightWrist: f.landmarks[LM.RIGHT_WRIST],
-          leftHip: f.landmarks[LM.LEFT_HIP],
-          rightHip: f.landmarks[LM.RIGHT_HIP],
+          leftElbow: f.landmarks[LM.LEFT_ELBOW],
+          rightElbow: f.landmarks[LM.RIGHT_ELBOW],
           leftShoulder: f.landmarks[LM.LEFT_SHOULDER],
           rightShoulder: f.landmarks[LM.RIGHT_SHOULDER],
+          leftHip: f.landmarks[LM.LEFT_HIP],
+          rightHip: f.landmarks[LM.RIGHT_HIP],
+          leftKnee: f.landmarks[LM.LEFT_KNEE],
+          rightKnee: f.landmarks[LM.RIGHT_KNEE],
+          leftAnkle: f.landmarks[LM.LEFT_ANKLE],
+          rightAnkle: f.landmarks[LM.RIGHT_ANKLE],
           nose: f.landmarks[LM.NOSE]
         }))
       };
