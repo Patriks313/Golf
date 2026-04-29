@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.5</title>
+  <title>Golf Coach — v0.4.1.6</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -1076,6 +1076,63 @@
 
   <script>
     // ============================================================
+    // Golf Coach v0.4.1.6 — MULTI-SIGNAL P7 CONSENSUS
+    //
+    // Algorithm change. Replaces single-signal P7 detection
+    // (argmax of smoothed wristY in [topIdx+1..finishIdx-1]) with
+    // a 3-way median over independent body-part signals. Triggered
+    // by April 29 offline analysis of v0.4.1.5 expanded-landmark
+    // JSON (7 swings, 6 fully segmented):
+    //
+    //   - Wrist L/R label-swap and teleporting in [P4..P10] is
+    //     real and frequent: ~92 wrist teleports across 6 swings
+    //     vs ~28 elbow teleports. Elbows are 3.3x more stable
+    //     through impact.
+    //   - Wrist-Y argmax and elbow-Y argmax agree within 1-3
+    //     frames on every valid swing. Switching to elbow-only
+    //     would be a marginal win and would lose the wrist signal
+    //     when it IS clean.
+    //   - Median of three independent signals is more robust than
+    //     either alone. Spread across signals also gives us a
+    //     confidence flag we never had before.
+    //
+    // The change in v0.4.1.6:
+    //   - impactIdx is now median(wristY argmax, elbowY argmax,
+    //     |rShoulder.x - lShoulder.x| argmax) over [topIdx+1..
+    //     finishIdx-1].
+    //   - Elbow trace built with the same low-conf fallback chain
+    //     wristY uses (HIGH_CONF=0.7, LOW_CONF=0.5), then 5-frame
+    //     smoothed.
+    //   - Shoulder trace uses abs() to defend against the
+    //     documented shoulder L/R label-swap mid-rotation.
+    //   - When the three candidates spread > 5 frames (~165ms at
+    //     30fps) a soft warning is added — verdict still ships,
+    //     but the user/reviewer sees that P7 was uncertain.
+    //   - Three candidates + spread + lowConfidence flag persisted
+    //     on every swing record (sessionSwings + JSON export) for
+    //     post-hoc validation against video ground truth.
+    //   - Diag panel (debug toggle) shows all three candidates and
+    //     the spread for live inspection.
+    //   - JSON version bumped to 0.4.1.6. Schema is purely
+    //     additive — old consumers ignore the new fields.
+    //
+    // What's untouched:
+    //   - P1 (address), P4 (top), P10 (finish) detection — all
+    //     remain on wristY. April 29 analysis confirmed these are
+    //     reliable; only P7 was broken.
+    //   - The smoothed wristY trace exported in JSON / shown in
+    //     the chart.
+    //   - All drill code, UX, voice loop, recording pipeline.
+    //
+    // What this does NOT fix:
+    //   - The ~350ms frame drop observed at impact in 5/7 swings
+    //     of the April 29 session. The actual impact frame is
+    //     sometimes literally missing from the data — no landmark
+    //     heuristic can recover a frame that doesn't exist. This
+    //     is the v0.4.2 "record-first / analyze-after" problem
+    //     and is a separate work-stream.
+    //
+    // ============================================================
     // Golf Coach v0.4.1.5 — EXPANDED LANDMARK EXPORT
     //
     // Investigation release. April 28 range session (25 swings on
@@ -1775,7 +1832,7 @@
         const { frames, smoothed,
                 addressIdx, topIdx, impactIdx, finishIdx,
                 tAddress, beepTime, fps, totalMs, clippedDurationMs,
-                rawPeaks, mergedPeaks, warnings } = ctx;
+                rawPeaks, mergedPeaks, warnings, p7Candidates } = ctx;
 
         const tTop = frames[topIdx].t;
         const tImpact = frames[impactIdx].t;
@@ -1800,6 +1857,17 @@
           ['Peaks after merging', mergedPeaks.length],
           ['Wrist rise', (smoothed[addressIdx] - smoothed[topIdx]).toFixed(3)]
         ];
+
+        // v0.4.1.6: surface the multi-signal P7 candidates in diag so the
+        // debug toggle shows how the three signals voted on this swing.
+        if (p7Candidates) {
+          diag.push(
+            ['P7 wrist-Y candidate', `frame ${p7Candidates.wristY}`],
+            ['P7 elbow-Y candidate', `frame ${p7Candidates.elbowY}`],
+            ['P7 shoulder-rot candidate', `frame ${p7Candidates.shoulderRot}`],
+            ['P7 candidate spread', `${p7Candidates.spread} frame${p7Candidates.spread === 1 ? '' : 's'}${p7Candidates.lowConfidence ? ' (low confidence)' : ''}`]
+          );
+        }
 
         let value = '—';
         let ratioNum = null;
@@ -1976,7 +2044,7 @@
       analyze: function(ctx) {
         const { frames, addressIdx, topIdx, impactIdx, finishIdx,
                 tAddress, beepTime, fps, totalMs, clippedDurationMs,
-                warnings } = ctx;
+                warnings, p7Candidates } = ctx;
 
         const ASSUMED_SHOULDER_INCHES = this.ASSUMED_SHOULDER_INCHES;
         const IMPACT_OFF_INCHES = this.IMPACT_OFF_INCHES;
@@ -2119,6 +2187,19 @@
           ['Vertical peak (full swing)', `${peakVerticalSigned >= 0 ? '+' : '−'}${peakVertical.toFixed(2)} in`],
           ['Impact worse axis', `${impactWorseAxis.toFixed(2)} in (off threshold ${IMPACT_OFF_INCHES})`]
         ];
+
+        // v0.4.1.6: surface the multi-signal P7 candidates in diag. Same
+        // rationale as the tempo drill — lets the debug toggle expose how
+        // confident the segmenter was about P7 on this swing. Important for
+        // head stability since the impact gate depends on P7 being right.
+        if (p7Candidates) {
+          diag.push(
+            ['P7 wrist-Y candidate', `frame ${p7Candidates.wristY}`],
+            ['P7 elbow-Y candidate', `frame ${p7Candidates.elbowY}`],
+            ['P7 shoulder-rot candidate', `frame ${p7Candidates.shoulderRot}`],
+            ['P7 candidate spread', `${p7Candidates.spread} frame${p7Candidates.spread === 1 ? '' : 's'}${p7Candidates.lowConfidence ? ' (low confidence)' : ''}`]
+          );
+        }
 
         return {
           value,
@@ -2711,7 +2792,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.5',
+        version: '0.4.1.6',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3727,10 +3808,117 @@
       const topIdx = mergedPeaks[0].idx;
       const finishIdx = mergedPeaks[1].idx;
 
-      let impactIdx = topIdx + 1;
-      for (let i = topIdx + 1; i < finishIdx; i++) {
-        if (smoothed[i] > smoothed[impactIdx]) impactIdx = i;
+      // ----- v0.4.1.6: multi-signal P7 consensus --------------------------
+      // Old (v0.4.1.5 and earlier): impactIdx = argmax(smoothed wristY)
+      // in [topIdx+1 .. finishIdx-1]. Single-signal heuristic.
+      //
+      // Problem (validated by April 29 session JSON, 7 swings):
+      //   - Wrist L/R labels swap during the [P4..P10] window. The April 29
+      //     dataset showed ~92 wrist teleports vs ~28 elbow teleports across
+      //     6 valid swings — elbows are 3.3x more stable through impact.
+      //   - The smoothed-wrist argmax often picks a frame pulled by a label-
+      //     swap rather than the actual hands-low frame.
+      //   - Frame drops (~350ms gaps observed in 5/6 swings) land near impact
+      //     on the live pipeline. That's a separate problem that v0.4.2's
+      //     record-first/analyze-after will address; this change does not
+      //     try to fix that.
+      //
+      // The fix: take the median of three INDEPENDENT P7 candidates:
+      //   1. wristYCandidate    — argmax of smoothed wristY (the old signal)
+      //   2. elbowYCandidate    — argmax of smoothed mid-elbow Y. Same low-
+      //                           conf fallback pattern as wrist.
+      //   3. shoulderRotCandidate — argmax of |rShoulder.x - lShoulder.x|.
+      //                             Body-rotation proxy. In face-on view
+      //                             shoulder width is at minimum at P4 and
+      //                             P10 (rotated away/toward target) and at
+      //                             maximum at impact (chest square to
+      //                             camera). Shoulder visibility is ~1.0
+      //                             throughout the swing per April 29 data.
+      //                             abs() defends against the documented
+      //                             shoulder L/R label-swap mid-rotation.
+      //
+      // Median of three: a single bad signal can't dominate. The April 29
+      // dataset showed all three signals agreeing within 1-3 frames on every
+      // valid swing.
+      //
+      // Candidate spread is exposed via the diag panel and persisted on the
+      // swing record so post-hoc analysis can flag swings where the signals
+      // disagree. If spread > 5 frames (~165ms at 30fps), a soft warning is
+      // added — the swing still ships its verdict, but the user / reviewer
+      // knows P7 was uncertain on this one.
+      //
+      // What's untouched: P1 (address), P4 (top), P10 (finish) detection.
+      // Those use wristY and remain reliable per the v0.4.1.5 analysis.
+      // The smoothed wristY trace exported in the JSON is also unchanged.
+
+      // 1) Build smoothed mid-elbow Y trace using the same low-conf fallback
+      //    pattern the address/top/finish detection uses for wristY.
+      const elbowYRaw = frames.map(f => {
+        const le = f.landmarks[LM.LEFT_ELBOW];
+        const re = f.landmarks[LM.RIGHT_ELBOW];
+        const lOk = le.v >= HIGH_CONF;
+        const rOk = re.v >= HIGH_CONF;
+        if (lOk && rOk) return (le.y + re.y) / 2;
+        if (lOk) return le.y;
+        if (rOk) return re.y;
+        if (le.v >= LOW_CONF && le.v >= re.v) return le.y;
+        if (re.v >= LOW_CONF && re.v > le.v) return re.y;
+        return null;
+      });
+      let lastElY = null;
+      for (let i = 0; i < elbowYRaw.length; i++) {
+        if (elbowYRaw[i] == null) elbowYRaw[i] = lastElY;
+        else lastElY = elbowYRaw[i];
       }
+      const firstElY = elbowYRaw.find(y => y != null);
+      for (let i = 0; i < elbowYRaw.length; i++) {
+        if (elbowYRaw[i] == null) elbowYRaw[i] = firstElY != null ? firstElY : 0.5;
+      }
+      const elbowYSmoothed = smooth(elbowYRaw, 5);
+
+      // 2) Build smoothed shoulder-width-X trace. abs() defends against L/R
+      //    label-swap mid-rotation. Shoulder visibility is uniformly high so
+      //    no fallback chain needed; if either is missing on a frame just
+      //    use 0 (won't be argmax).
+      const shoulderWidth = frames.map(f => {
+        const ls = f.landmarks[LM.LEFT_SHOULDER];
+        const rs = f.landmarks[LM.RIGHT_SHOULDER];
+        if (ls && rs) return Math.abs(rs.x - ls.x);
+        return 0;
+      });
+      const shoulderWidthSmoothed = smooth(shoulderWidth, 5);
+
+      // 3) Find argmax of each signal in [topIdx+1 .. finishIdx-1].
+      //    Identical search range and tiebreaker as the legacy code.
+      function argmaxIn(arr, lo, hi) {
+        let best = lo;
+        for (let i = lo; i < hi; i++) {
+          if (arr[i] > arr[best]) best = i;
+        }
+        return best;
+      }
+      const wristYCandidate = argmaxIn(smoothed, topIdx + 1, finishIdx);
+      const elbowYCandidate = argmaxIn(elbowYSmoothed, topIdx + 1, finishIdx);
+      const shoulderRotCandidate = argmaxIn(shoulderWidthSmoothed, topIdx + 1, finishIdx);
+
+      // 4) Median of the three candidates is the final impactIdx.
+      const candidates = [wristYCandidate, elbowYCandidate, shoulderRotCandidate];
+      const sortedCandidates = [...candidates].sort((a, b) => a - b);
+      const impactIdx = sortedCandidates[1];
+      const candidateSpread = sortedCandidates[2] - sortedCandidates[0];
+
+      // 5) Soft confidence flag. 5 frames ~= 165ms at 30fps, comfortably
+      //    larger than the impact zone width on a normal swing. Above this,
+      //    the three signals genuinely disagree and the chosen P7 is suspect.
+      const P7_SPREAD_WARN = 5;
+      const p7LowConfidence = candidateSpread > P7_SPREAD_WARN;
+      if (p7LowConfidence) {
+        warnings.push(
+          `Impact detection low confidence — wrist/elbow/shoulder signals ` +
+          `spread across ${candidateSpread} frames. P7 may be off.`
+        );
+      }
+      // ----- end v0.4.1.6 multi-signal P7 consensus -----------------------
 
       const chartStartT = tAddress - PRE_ADDRESS_BUFFER_MS;
       const chartEndT = frames[finishIdx].t + POST_FINISH_BUFFER_MS;
@@ -3758,6 +3946,8 @@
       // v0.4.0: dispatch to active drill. The shared swing segmenter has
       // produced the canonical {addressIdx, topIdx, impactIdx, finishIdx}
       // contract; the drill computes its metric on top of that.
+      // v0.4.1.6: the ctx also carries the P7 multi-signal candidates so any
+      // drill that wants to react to low-confidence impact can. None do yet.
       const drill = getCurrentDrill();
       const ctx = {
         frames, smoothed, wristY: clippedY,
@@ -3765,6 +3955,14 @@
         cAddress, cTop, cImpact, cFinish,
         tAddress, beepTime, fps, totalMs, clippedDurationMs,
         rawPeaks, mergedPeaks, warnings,
+        // v0.4.1.6: multi-signal P7 candidates and confidence flag.
+        p7Candidates: {
+          wristY: wristYCandidate,
+          elbowY: elbowYCandidate,
+          shoulderRot: shoulderRotCandidate,
+          spread: candidateSpread,
+          lowConfidence: p7LowConfidence
+        },
         cameraAngle: (sessionConfig && sessionConfig.cameraAngle) || 'faceOn'
       };
       const result = drill.analyze(ctx);
@@ -3804,7 +4002,17 @@
         // depends on the analysis output (not just verdict class). Head
         // stability uses this for "vertical down 2, horizontal forward 4".
         // showResult prefers this over spokenForClass[verdictClass].
-        spokenPhraseOverride: result.spokenPhraseOverride
+        spokenPhraseOverride: result.spokenPhraseOverride,
+        // v0.4.1.6: persist the three P7 candidates and the spread on the
+        // swing record so post-hoc analysis can validate the multi-signal
+        // approach. Indices are absolute (matching the full frames array).
+        p7Candidates: {
+          wristY: wristYCandidate,
+          elbowY: elbowYCandidate,
+          shoulderRot: shoulderRotCandidate,
+          spread: candidateSpread,
+          lowConfidence: p7LowConfidence
+        }
       });
     }
 
@@ -3913,7 +4121,13 @@
       // spokenForClass[verdictClass] when present. Used by head stability
       // to speak "vertical down 2, horizontal forward 4" (computed from
       // impact-gate displacements, not from a static verdict-class map).
-      spokenPhraseOverride
+      spokenPhraseOverride,
+      // v0.4.1.6: multi-signal P7 candidates and spread. Object with
+      // {wristY, elbowY, shoulderRot, spread, lowConfidence}. Undefined on
+      // early-exit error paths (e.g. "Incomplete swing"); persisted on the
+      // swing record when present so post-hoc analysis can validate the
+      // multi-signal approach against video ground truth.
+      p7Candidates
     }) {
       const drill = getCurrentDrill();
       // v0.4.0/0.4.1.2: speak the verdict FIRST, before any DOM work. iOS
@@ -3991,7 +4205,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.5',
+        version: '0.4.1.6',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -4015,6 +4229,9 @@
         topIdx:     (absTopIdx     != null) ? absTopIdx     : topIdx,
         impactIdx:  (absImpactIdx  != null) ? absImpactIdx  : impactIdx,
         finishIdx:  (absFinishIdx  != null) ? absFinishIdx  : finishIdx,
+        // v0.4.1.6: P7 multi-signal data. Null on early-exit error paths
+        // where p7Candidates was never computed.
+        p7Candidates: p7Candidates || null,
         wristY: (fullWristY && fullWristY.length) ? fullWristY : wristY,
         // v0.4.1.4: keep the clipped pair around for the debug-toggle
         // chart redraw at line ~4087. The initial chart render at the
@@ -4085,6 +4302,12 @@
         topIdx:     persistTopIdx,
         impactIdx:  persistImpactIdx,
         finishIdx:  persistFinishIdx,
+        // v0.4.1.6: persist the multi-signal P7 candidates and spread on
+        // every swing record. Null on early-exit error paths. Lets the
+        // post-hoc analyzer (and the in-app debug toggle) see how often the
+        // three signals agree, and whether the median chosen as P7 lines up
+        // with video ground truth.
+        p7Candidates: p7Candidates || null,
         wristY: isComplete ? persistWristY.slice() : null,
         frames: lastAnalysis.frames,
         // v0.4.1.3: video blob for ground-truth debugging. Populated by the
