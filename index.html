@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.4</title>
+  <title>Golf Coach — v0.4.2.0.5</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.4',
+        version: '0.4.2.0.5',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3316,7 +3316,7 @@
     async function runOfflinePoseOverBlob(blob) {
       if (!blob) throw new Error('runOfflinePoseOverBlob: blob is null');
 
-      console.log('[v0.4.2.0.4] offline pose: starting, blob size=' + blob.size);
+      console.log('[v0.4.2.0.5] offline pose: starting, blob size=' + blob.size);
 
       const offlineFrames = [];
       const blobUrl = URL.createObjectURL(blob);
@@ -3340,21 +3340,21 @@
       // If metadata doesn't load, we proceed anyway and let the seek loop
       // handle whatever it finds; worst case we collect zero frames and
       // analyze() reports "no pose detected" instead of freezing forever.
-      console.log('[v0.4.2.0.4] offline pose: waiting for metadata');
+      console.log('[v0.4.2.0.5] offline pose: waiting for metadata');
       await new Promise((resolve) => {
         let settled = false;
         const done = () => { if (!settled) { settled = true; resolve(); } };
         hiddenVideo.onloadedmetadata = done;
         hiddenVideo.onerror = () => {
-          console.warn('[v0.4.2.0.4] offline pose: video error during metadata load');
+          console.warn('[v0.4.2.0.5] offline pose: video error during metadata load');
           done();
         };
         setTimeout(() => {
-          if (!settled) console.warn('[v0.4.2.0.4] offline pose: metadata timeout after 2s, proceeding anyway');
+          if (!settled) console.warn('[v0.4.2.0.5] offline pose: metadata timeout after 2s, proceeding anyway');
           done();
         }, 2000);
       });
-      console.log('[v0.4.2.0.4] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
+      console.log('[v0.4.2.0.5] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
 
       // v0.4.2.0.3: hiddenVideo.duration is unreliable for MediaRecorder blobs
       // on iOS Safari (often Infinity or NaN until played to end). Read it but
@@ -3387,6 +3387,23 @@
 
       const originalOnResults = onPoseResults;
       pose.onResults(collector);
+
+      // v0.4.2.0.5: PAUSE THE LIVE POSE PUMP during the offline pass.
+      // Without this, the live camera's requestAnimationFrame pump keeps
+      // calling pose.send(image: video) on every camera frame in the
+      // background, and every result hits our collector — stamped with
+      // whatever lastSentT the seek loop happens to be on. Field testing
+      // of v0.4.2.0.3 showed this produced 32-34 duplicate frames per
+      // unique seek timestamp (628 frames over 19 unique t values, all
+      // smoothly varying landmarks within a t group = the live pump still
+      // running). MediaPipe's WASM worker keeps consuming camera frames
+      // even while the JS thread awaits seek/pose, so blocking JS isn't
+      // enough — we have to stop scheduling new live sends.
+      const wasPumping = (rafId !== null);
+      if (wasPumping) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
 
       let lastSentT = 0;
       let usedSeekingFallback = false;
@@ -3465,7 +3482,7 @@
 
           lastSentT = tMs;
           if (offlineFrames.length % 10 === 0) {
-            console.log('[v0.4.2.0.4] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
+            console.log('[v0.4.2.0.5] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
           }
           await new Promise(res => {
             pendingResolve = res;
@@ -3489,6 +3506,11 @@
         if (hiddenVideo.parentNode) {
           hiddenVideo.parentNode.removeChild(hiddenVideo);
         }
+        // v0.4.2.0.5: restart the live pose pump now that the offline pass
+        // is done. The next pump() call will reschedule itself via rAF.
+        if (wasPumping && rafId === null) {
+          pump();
+        }
       }
 
       // Use the actual last frame's t as durationMs for diagnostics if metadata was bad.
@@ -3503,7 +3525,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.4] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.5] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4627,7 +4649,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.4',
+        version: '0.4.2.0.5',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
