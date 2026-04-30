@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.6</title>
+  <title>Golf Coach — v0.4.1.7</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -1073,8 +1073,81 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+  <!-- v0.4.1.7: JSZip used to bundle session videos + JSON into a single
+       download. Replaces v0.4.1.3's sequential anchor-click downloads,
+       which iOS Safari throttles down to 1 file in practice. ~94 KB
+       gzipped, loaded once at startup, used only on the review screen
+       when the user taps "Download session". -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
 
   <script>
+    // ============================================================
+    // Golf Coach v0.4.1.7 — DOWNLOAD-ALL-VIDEOS FIX
+    //
+    // Surgical patch that fixes the v0.4.1.3 "Download videos"
+    // button on iPhone, where it produced only 1 of N expected
+    // videos in field testing. Two real bugs underneath:
+    //
+    //   Bug A — onstop closure binds to stale recorder/chunks.
+    //     v0.4.1.3 wired mediaRecorder.onstop = finalize on the
+    //     GLOBAL mediaRecorder reference, and finalize captured
+    //     currentVideoChunks (also global) by reference. When swing
+    //     N+1's beginRecording() reassigned the global before swing
+    //     N's recorder finished flushing, swing N's onstop was lost
+    //     OR finalize ran against the now-empty chunks array. Net
+    //     effect: only swing 1 reliably ended up with a videoBlob;
+    //     swings 2..N had videoBlob = null. Button label correctly
+    //     showed "Download videos (1/15)" on field tests, confirming
+    //     this is what was happening.
+    //
+    //   Bug B — sequential anchor-click downloads are throttled.
+    //     Even when all blobs existed (e.g. on PC), iOS Safari
+    //     silently drops sequential anchor.click() download
+    //     triggers, regardless of the 250ms gap. The 250ms gap
+    //     dodged Safari's old popup guard but not the modern
+    //     sequential-download throttle.
+    //
+    // Fixes in v0.4.1.7:
+    //
+    //   1. beginRecording() and showResult() rewrite. The recorder
+    //      reference and chunks array are now captured at the
+    //      moment the recorder is created, on the swing-record
+    //      object itself (recorderForVideo, chunksForVideo). The
+    //      onstop handler is wired immediately after construction,
+    //      reading from the captured local state, and patches the
+    //      swing record by closure. No globals involved; no race
+    //      with the next swing's beginRecording.
+    //
+    //   2. exportSessionVideos() rewritten as a single-download
+    //      ZIP bundle. JSZip from CDN packs all videos plus a copy
+    //      of the session JSON into one file
+    //      (session-<TS>-bundle.zip). One user-gesture-driven
+    //      download = no Safari throttle to fight. The JSON-inside-
+    //      ZIP path means the JSON and videos are guaranteed to
+    //      stay correlated when you hand them off.
+    //
+    //   3. The session-end "Download" button on the review screen
+    //      now downloads the bundle. The separate "Download JSON"
+    //      and "Download videos" paths still exist for cases where
+    //      you only want one (e.g. JSON-only after a shadow-swing
+    //      session with mediaRecorder unsupported).
+    //
+    // What's untouched:
+    //   - Pose pipeline, segmenter, all drills — purely a tooling
+    //     fix, no algorithm changes.
+    //   - JSON / CSV format. The JSON inside the ZIP is identical
+    //     to what exportSessionRawJSON() produces standalone.
+    //   - All v0.4.1.6 behavior preserved.
+    //
+    // Why this matters NOW (per v0.4.2.x handover, Apr 30 EOD):
+    //   The PC v0.4.2.0.9 frame-extraction session revealed real
+    //   segmenter bugs (P1 mid-takeaway, P4 14 frames early, P7 in
+    //   the wrong half of the swing). Those bugs exist in v0.4.1.6
+    //   too. To validate them on iPhone data we need to run the
+    //   same frame-extraction technique on iPhone-captured videos,
+    //   which requires the download-all-videos path to actually
+    //   work. That's what this patch unblocks.
+    //
     // ============================================================
     // Golf Coach v0.4.1.6 — MULTI-SIGNAL P7 CONSENSUS
     //
@@ -2427,6 +2500,11 @@
     let currentVideoChunks = [];      // chunks for the swing currently being recorded
     let mediaRecorderSupported = false;
     let mediaRecorderMimeType = '';
+    // v0.4.1.7: per-swing recording state captured at MediaRecorder
+    // construction time so beginRecording's locals don't get clobbered
+    // when the next swing starts. showResult reads this and attaches
+    // it to the swing record.
+    let currentRecording = null;
 
     // v0.3.1: mode-flip helpers. Camera keeps running across the flip —
     // we don't stop/restart the pose pump or getUserMedia stream, just
@@ -2792,7 +2870,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.6',
+        version: '0.4.1.7',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -2851,26 +2929,136 @@
       URL.revokeObjectURL(url);
     }
 
-    // v0.4.1.3: download all captured swing videos as individual files.
-    // Files are named swing-NN.mp4 (or .webm depending on the browser-
-    // supported mime type) where NN matches the swing's 1-indexed position
-    // in the session — same as the JSON's swingNumber field, so a JSON +
-    // video set can be correlated by filename.
+    // v0.4.1.7: download all captured swing videos PLUS the session JSON
+    // as a single ZIP bundle. Replaces v0.4.1.3's sequential anchor-
+    // click downloads, which iOS Safari throttles down to 1 file in
+    // practice (the whole reason this rewrite exists — see release
+    // notes at top of script).
     //
-    // Sequential downloads with a small delay between them: Safari has
-    // historically rejected simultaneous download triggers (treated as
-    // popup spam) so we fire one every 250ms.
-    function exportSessionVideos() {
+    // Bundle contents:
+    //   session-<TS>/
+    //     session.json                  ← same content as exportSessionRawJSON
+    //     swing-01.mp4 (or .webm)       ← per-swing videos, NN matches JSON's swingNumber
+    //     swing-02.mp4
+    //     ...
+    //
+    // One download = one user-gesture-triggered click = no Safari multi-
+    // download throttle to fight. The JSON-inside-ZIP guarantees the JSON
+    // and videos stay correlated when you hand them off.
+    //
+    // Memory note: for a 10-swing session this is ~30-50 MB of video
+    // data. JSZip with compression OFF (STORE) keeps memory low and is
+    // fast — videos are already compressed, deflating again would just
+    // waste CPU.
+    async function exportSessionVideos() {
       const withVideo = [];
       sessionSwings.forEach((sw, i) => {
         if (sw.videoBlob) withVideo.push({ swing: sw, idx: i + 1 });
       });
       if (withVideo.length === 0) return;
 
-      // Pick file extension from the mime type. mp4 ⇒ .mp4, webm ⇒ .webm.
+      // If JSZip didn't load (offline / CDN blocked / cache miss), fall
+      // back to the v0.4.1.3 sequential-download path. Better than
+      // nothing — user at least gets swing 1 and can retry.
+      if (typeof JSZip === 'undefined') {
+        console.warn('[v0.4.1.7] JSZip unavailable; falling back to sequential downloads (Safari may drop most).');
+        return exportSessionVideosLegacy(withVideo);
+      }
+
       const ext = (sessionSwings[0].videoMimeType || '').includes('webm') ? 'webm' : 'mp4';
       const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const bundleName = `session-${stamp}`;
 
+      try {
+        const zip = new JSZip();
+        const folder = zip.folder(bundleName);
+
+        // Include the session JSON (identical to exportSessionRawJSON's
+        // payload). Built inline so we don't depend on the standalone
+        // export function being callable here.
+        const jsonPayload = buildSessionJsonPayload();
+        folder.file('session.json', JSON.stringify(jsonPayload, null, 2));
+
+        // Add each video. STORE = no recompression (videos already are).
+        withVideo.forEach(({ swing, idx }) => {
+          const name = `swing-${String(idx).padStart(2, '0')}.${ext}`;
+          folder.file(name, swing.videoBlob);
+        });
+
+        // Generate the zip blob and trigger one download. iOS Safari
+        // is fine with a single download — it's the multi-download
+        // throttle that broke v0.4.1.3.
+        const zipBlob = await zip.generateAsync({
+          type: 'blob',
+          compression: 'STORE'
+        });
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${bundleName}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Revoke after a tick — browser still needs the URL during click.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {
+        console.warn('[v0.4.1.7] ZIP bundling failed; falling back to sequential downloads:', e);
+        exportSessionVideosLegacy(withVideo);
+      }
+    }
+
+    // v0.4.1.7: build the session JSON payload as a plain object, so
+    // exportSessionVideos can include it inside the ZIP without
+    // round-tripping through a download. Mirrors exportSessionRawJSON.
+    function buildSessionJsonPayload() {
+      return {
+        version: '0.4.1.7',
+        sessionStartedAt: sessionConfig && sessionConfig.startedAt
+          ? new Date(sessionConfig.startedAt).toISOString()
+          : null,
+        sessionEndedAt: new Date().toISOString(),
+        sessionConfig: sessionConfig
+          ? {
+              drill: sessionConfig.drill,
+              cameraAngle: sessionConfig.cameraAngle || 'faceOn',
+              voiceEnabled: sessionConfig.voiceEnabled,
+              shapeEnabled: sessionConfig.shapeEnabled
+            }
+          : null,
+        swings: sessionSwings.map((s, i) => {
+          const {
+            timestamp, drill, cameraAngle, verdict, verdictClass, value, shape,
+            addressIdx, topIdx, impactIdx, finishIdx, wristY, frames,
+            ...drillExtras
+          } = s;
+          return {
+            swingNumber: i + 1,
+            timestamp: timestamp || null,
+            drill: drill || null,
+            cameraAngle: cameraAngle || 'faceOn',
+            verdict: verdict || null,
+            verdictClass: verdictClass || null,
+            value: value != null ? value : null,
+            shape: shape || null,
+            addressIdx: addressIdx != null ? addressIdx : null,
+            topIdx: topIdx != null ? topIdx : null,
+            impactIdx: impactIdx != null ? impactIdx : null,
+            finishIdx: finishIdx != null ? finishIdx : null,
+            wristY: wristY || null,
+            frames: frames || [],
+            ...drillExtras
+          };
+        })
+      };
+    }
+
+    // v0.4.1.7: legacy sequential-download fallback, used only if JSZip
+    // failed to load or zip generation threw. Kept verbatim from v0.4.1.3
+    // so the failure mode at least matches what users saw before.
+    function exportSessionVideosLegacy(withVideo) {
+      if (!withVideo || withVideo.length === 0) return;
+      const ext = (sessionSwings[0].videoMimeType || '').includes('webm') ? 'webm' : 'mp4';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       let i = 0;
       const next = () => {
         if (i >= withVideo.length) return;
@@ -2882,7 +3070,6 @@
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        // Revoke after a tick — the browser still needs the URL during click.
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         i++;
         if (i < withVideo.length) setTimeout(next, 250);
@@ -3524,18 +3711,77 @@
       // assembled in the recorder's onstop handler (set up below). Skip
       // entirely if the browser doesn't support recording — the rest of
       // the flow continues exactly as v0.4.1.2.
+      //
+      // v0.4.1.7 closure fix: build a per-swing pendingRecording object
+      // and wire its onstop handler RIGHT HERE, against locally-captured
+      // refs. The previous version wired onstop later (in showResult)
+      // against the GLOBAL mediaRecorder, which was already reassigned
+      // by the next beginRecording() call by then — losing the wiring
+      // for swings 2..N. By moving the wiring up and capturing locals,
+      // each swing's onstop is guaranteed to fire on its own recorder
+      // and write into its own chunks array. showResult just reads the
+      // pendingRecording.blob field (or sets a callback if not ready
+      // yet).
       currentVideoChunks = [];
+      currentRecording = null;  // v0.4.1.7: reset before assignment
       if (mediaRecorderSupported && cameraStream) {
         try {
           const opts = mediaRecorderMimeType ? { mimeType: mediaRecorderMimeType } : {};
-          mediaRecorder = new MediaRecorder(cameraStream, opts);
-          mediaRecorder.ondataavailable = (e) => {
-            if (e.data && e.data.size > 0) currentVideoChunks.push(e.data);
+          const localRecorder = new MediaRecorder(cameraStream, opts);
+          const localChunks = [];
+          const localMime = mediaRecorderMimeType || 'video/mp4';
+
+          // Per-swing recording state. showResult will pick this up via
+          // the global currentRecording, attach it to the swing record,
+          // and either copy the blob immediately (if already finalized)
+          // or mark itself as the consumer (so finalize patches the
+          // swing record once chunks are flushed).
+          const pending = {
+            recorder: localRecorder,
+            chunks: localChunks,
+            mime: localMime,
+            blob: null,
+            // Filled in by showResult when this recording is attached
+            // to a swing record. Until then, finalize just stores blob
+            // on `pending` and showResult will read it later.
+            attachedSwingRecord: null
           };
-          mediaRecorder.start();
+
+          localRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) localChunks.push(e.data);
+          };
+          localRecorder.onstop = () => {
+            try {
+              if (localChunks.length > 0) {
+                const blob = new Blob(localChunks, { type: localMime });
+                pending.blob = blob;
+                // If showResult has already attached this recording to
+                // a swing record, patch it now. Otherwise showResult
+                // will read pending.blob when it runs.
+                if (pending.attachedSwingRecord) {
+                  pending.attachedSwingRecord.videoBlob = blob;
+                  pending.attachedSwingRecord.videoSizeBytes = blob.size;
+                }
+              }
+            } catch (e) {
+              console.warn('[v0.4.1.7] Failed to assemble video blob:', e);
+            }
+          };
+
+          localRecorder.start();
+
+          // Globals retained for backward compatibility with stopRecording
+          // (it still calls mediaRecorder.stop()) and the legacy
+          // currentVideoChunks reference. These are now redundant with the
+          // per-swing locals captured in `pending`, but keeping them avoids
+          // touching unrelated code.
+          mediaRecorder = localRecorder;
+          currentVideoChunks = localChunks;
+          currentRecording = pending;
         } catch (e) {
-          console.warn('[v0.4.1.3] MediaRecorder failed to start:', e);
+          console.warn('[v0.4.1.7] MediaRecorder failed to start:', e);
           mediaRecorder = null;
+          currentRecording = null;
         }
       }
 
@@ -4205,7 +4451,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.6',
+        version: '0.4.1.7',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -4324,34 +4570,28 @@
       };
       sessionSwings.push(swingRecord);
 
-      // v0.4.1.3: wire the MediaRecorder's onstop event to backfill the
-      // video blob into the record we just pushed. The recorder was started
-      // in beginRecording(), stopped in stopRecording(); by the time we get
-      // here it may already be 'inactive' (chunks ready) or still flushing.
-      // Either way, set onstop to assemble the blob and patch swingRecord.
-      // We capture swingRecord by closure so even if more swings are pushed
-      // before this recorder finishes, we patch the right one.
-      if (mediaRecorder) {
-        const targetRecord = swingRecord;
-        const chunksAtTime = currentVideoChunks;  // capture array reference
-        const mimeType = mediaRecorderMimeType || 'video/mp4';
-        const finalize = () => {
-          if (chunksAtTime.length > 0) {
-            try {
-              const blob = new Blob(chunksAtTime, { type: mimeType });
-              targetRecord.videoBlob = blob;
-              targetRecord.videoSizeBytes = blob.size;
-            } catch (e) {
-              console.warn('[v0.4.1.3] Failed to assemble video blob:', e);
-            }
-          }
-        };
-        if (mediaRecorder.state === 'inactive') {
-          // Already stopped — chunks should be flushed; finalize now.
-          finalize();
-        } else {
-          mediaRecorder.onstop = finalize;
+      // v0.4.1.7: attach the per-swing recording captured in
+      // beginRecording() to this swing record. The onstop handler was
+      // wired immediately at construction time (in beginRecording)
+      // against locally-captured refs, so by now `currentRecording.blob`
+      // is either already populated (recorder finalized fast) or will
+      // be populated shortly (the onstop handler will patch the swing
+      // record itself once chunks are flushed, via the
+      // attachedSwingRecord pointer we set here).
+      //
+      // This replaces v0.4.1.3's broken approach of wiring onstop here
+      // against the GLOBAL mediaRecorder, which was already reassigned
+      // by the next beginRecording() call by the time we got here for
+      // swings 2..N. See the v0.4.1.7 release-notes block at top of
+      // script for the full diagnosis.
+      if (currentRecording) {
+        currentRecording.attachedSwingRecord = swingRecord;
+        if (currentRecording.blob) {
+          // Recorder finalized before showResult ran — copy now.
+          swingRecord.videoBlob = currentRecording.blob;
+          swingRecord.videoSizeBytes = currentRecording.blob.size;
         }
+        // else: onstop will populate via attachedSwingRecord pointer.
       }
 
       // v0.2.1: enter the 'waiting' state — recognition listens for shape
