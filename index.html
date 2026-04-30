@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.3</title>
+  <title>Golf Coach — v0.4.2.0.4</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.3',
+        version: '0.4.2.0.4',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3316,19 +3316,45 @@
     async function runOfflinePoseOverBlob(blob) {
       if (!blob) throw new Error('runOfflinePoseOverBlob: blob is null');
 
+      console.log('[v0.4.2.0.4] offline pose: starting, blob size=' + blob.size);
+
       const offlineFrames = [];
       const blobUrl = URL.createObjectURL(blob);
       const hiddenVideo = document.createElement('video');
       hiddenVideo.muted = true;
       hiddenVideo.playsInline = true;
       hiddenVideo.preload = 'auto';
+      // v0.4.2.0.4: iOS Safari can fail to fire 'loadedmetadata' on detached
+      // <video> elements created via document.createElement and not appended
+      // to the DOM. Append off-screen so the element is part of the document.
+      hiddenVideo.style.position = 'absolute';
+      hiddenVideo.style.left = '-9999px';
+      hiddenVideo.style.top = '-9999px';
+      hiddenVideo.style.width = '1px';
+      hiddenVideo.style.height = '1px';
+      hiddenVideo.style.opacity = '0';
+      document.body.appendChild(hiddenVideo);
       hiddenVideo.src = blobUrl;
 
-      // Wait for metadata so we know duration / dimensions.
-      await new Promise((resolve, reject) => {
-        hiddenVideo.onloadedmetadata = resolve;
-        hiddenVideo.onerror = () => reject(new Error('Video metadata load failed'));
+      // Wait for metadata, with a hard timeout so we never hang here.
+      // If metadata doesn't load, we proceed anyway and let the seek loop
+      // handle whatever it finds; worst case we collect zero frames and
+      // analyze() reports "no pose detected" instead of freezing forever.
+      console.log('[v0.4.2.0.4] offline pose: waiting for metadata');
+      await new Promise((resolve) => {
+        let settled = false;
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        hiddenVideo.onloadedmetadata = done;
+        hiddenVideo.onerror = () => {
+          console.warn('[v0.4.2.0.4] offline pose: video error during metadata load');
+          done();
+        };
+        setTimeout(() => {
+          if (!settled) console.warn('[v0.4.2.0.4] offline pose: metadata timeout after 2s, proceeding anyway');
+          done();
+        }, 2000);
       });
+      console.log('[v0.4.2.0.4] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
 
       // v0.4.2.0.3: hiddenVideo.duration is unreliable for MediaRecorder blobs
       // on iOS Safari (often Infinity or NaN until played to end). Read it but
@@ -3438,6 +3464,9 @@
           prevCurrentTime = hiddenVideo.currentTime;
 
           lastSentT = tMs;
+          if (offlineFrames.length % 10 === 0) {
+            console.log('[v0.4.2.0.4] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
+          }
           await new Promise(res => {
             pendingResolve = res;
             let settled = false;
@@ -3456,6 +3485,10 @@
         // Restore the live overlay handler no matter what.
         pose.onResults(originalOnResults);
         URL.revokeObjectURL(blobUrl);
+        // Remove the hidden video element from the DOM.
+        if (hiddenVideo.parentNode) {
+          hiddenVideo.parentNode.removeChild(hiddenVideo);
+        }
       }
 
       // Use the actual last frame's t as durationMs for diagnostics if metadata was bad.
@@ -3470,7 +3503,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.3] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.4] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4594,7 +4627,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.3',
+        version: '0.4.2.0.4',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
