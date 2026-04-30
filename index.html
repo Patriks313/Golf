@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.7</title>
+  <title>Golf Coach — v0.4.2.0.8</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.7',
+        version: '0.4.2.0.8',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3316,7 +3316,7 @@
     async function runOfflinePoseOverBlob(blob) {
       if (!blob) throw new Error('runOfflinePoseOverBlob: blob is null');
 
-      console.log('[v0.4.2.0.7] offline pose: starting, blob size=' + blob.size);
+      console.log('[v0.4.2.0.8] offline pose: starting, blob size=' + blob.size);
 
       const offlineFrames = [];
       const blobUrl = URL.createObjectURL(blob);
@@ -3340,7 +3340,7 @@
       // If metadata doesn't load, we proceed anyway and let the seek loop
       // handle whatever it finds; worst case we collect zero frames and
       // analyze() reports "no pose detected" instead of freezing forever.
-      console.log('[v0.4.2.0.7] offline pose: waiting for metadata');
+      console.log('[v0.4.2.0.8] offline pose: waiting for metadata');
       if (typeof status !== 'undefined' && status) {
         status.textContent = 'Analyzing… (3/4 loading video metadata)';
       }
@@ -3349,15 +3349,15 @@
         const done = () => { if (!settled) { settled = true; resolve(); } };
         hiddenVideo.onloadedmetadata = done;
         hiddenVideo.onerror = () => {
-          console.warn('[v0.4.2.0.7] offline pose: video error during metadata load');
+          console.warn('[v0.4.2.0.8] offline pose: video error during metadata load');
           done();
         };
         setTimeout(() => {
-          if (!settled) console.warn('[v0.4.2.0.7] offline pose: metadata timeout after 2s, proceeding anyway');
+          if (!settled) console.warn('[v0.4.2.0.8] offline pose: metadata timeout after 2s, proceeding anyway');
           done();
         }, 2000);
       });
-      console.log('[v0.4.2.0.7] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
+      console.log('[v0.4.2.0.8] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
       if (typeof status !== 'undefined' && status) {
         status.textContent = 'Analyzing… (3/4 metadata done dur=' + hiddenVideo.duration + ' extracting…)';
       }
@@ -3431,6 +3431,8 @@
 
       let lastSentT = 0;
       let usedSeekingFallback = false;
+      let loopIterations = 0;
+      let posesSent = 0;
 
       try {
         // v0.4.2.0.2: rVFC path REMOVED. Two separate iOS Safari bugs were
@@ -3505,10 +3507,11 @@
           prevCurrentTime = hiddenVideo.currentTime;
 
           lastSentT = tMs;
-          if (offlineFrames.length % 10 === 0) {
-            console.log('[v0.4.2.0.7] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
+          loopIterations++;
+          if (loopIterations % 5 === 0 || (loopIterations < 20 && loopIterations % 2 === 0)) {
+            console.log('[v0.4.2.0.8] iter=' + loopIterations + ' sent=' + posesSent + ' received=' + offlineFrames.length);
             if (typeof status !== 'undefined' && status) {
-              status.textContent = 'Analyzing… (3/4 ' + offlineFrames.length + ' frames extracted)';
+              status.textContent = 'Analyzing… (3/4 iter=' + loopIterations + ' sent=' + posesSent + ' got=' + offlineFrames.length + ')';
             }
           }
 
@@ -3528,19 +3531,53 @@
             continue;
           }
 
+          // v0.4.2.0.8: throw multiple things at the wall to find which makes
+          // pose.send produce results on iOS Safari.
+          //   (a) rAF-gate the send. iOS Safari may tie MediaPipe WASM
+          //       scheduling to the rAF clock (the live pump runs inside rAF).
+          //   (b) Try ImageBitmap as input — sometimes iOS handles
+          //       ImageBitmap differently than HTMLCanvasElement.
+          //   (c) Always increment posesSent before await so we can see
+          //       loop-vs-pose progress in the heartbeat.
+
+          // Wait one rAF tick before sending. Don't keep this in the timeout
+          // budget — fall through to a Promise-based fallback if rAF never
+          // fires (which it might not if the page isn't visible).
+          await new Promise(res => {
+            const t = setTimeout(res, 50);
+            requestAnimationFrame(() => { clearTimeout(t); res(); });
+          });
+
+          // Try to make an ImageBitmap from the canvas. If ImageBitmap isn't
+          // supported, fall back to passing the canvas itself.
+          let poseInput = offscreenCanvas;
+          if (typeof createImageBitmap === 'function') {
+            try {
+              poseInput = await createImageBitmap(offscreenCanvas);
+            } catch (e) {
+              poseInput = offscreenCanvas;
+            }
+          }
+
+          posesSent++;
           await new Promise(res => {
             pendingResolve = res;
             let settled = false;
             const wrap = () => { if (!settled) { settled = true; res(); } };
             pendingResolve = wrap;
             try {
-              pose.send({ image: offscreenCanvas }).catch(() => wrap());
+              pose.send({ image: poseInput }).catch(() => wrap());
             } catch (e) {
               wrap();
             }
             // Hard timeout in case pose.send() never returns a result.
             setTimeout(wrap, SEEK_TIMEOUT_MS);
           });
+
+          // Free ImageBitmap if we created one.
+          if (poseInput !== offscreenCanvas && poseInput.close) {
+            try { poseInput.close(); } catch(e) {}
+          }
         }
       } finally {
         // Restore the live overlay handler no matter what.
@@ -3569,7 +3606,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.7] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.8] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4702,7 +4739,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.7',
+        version: '0.4.2.0.8',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
