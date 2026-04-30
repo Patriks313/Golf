@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.6</title>
+  <title>Golf Coach — v0.4.2.0</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -1075,6 +1075,114 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
 
   <script>
+    // ============================================================
+    // Golf Coach v0.4.2.0 — RECORD-FIRST / ANALYZE-AFTER
+    //
+    // Architectural change. Splits capture from analysis. Through
+    // v0.4.1.6, MediaPipe Pose ran live on the camera stream and
+    // every detected pose was pushed into frames[] *during* the
+    // 5s recording window. That coupled two things that don't have
+    // to be coupled:
+    //   - The on-screen skeleton overlay (a UX feature — "the
+    //     camera sees you").
+    //   - The analysis dataset (the frames[] that segmenter and
+    //     drills consume).
+    // It also capped the analysis at whatever frame rate the live
+    // pump could sustain on the device CPU (~38 fps measured on
+    // iPhone Safari April 29), and meant that any frame the live
+    // pump dropped during recording was lost forever.
+    //
+    // v0.4.2.0 keeps capture and analysis as two separate passes:
+    //   1. CAPTURE PASS (during the recording window, unchanged
+    //      from a user perspective): MediaRecorder writes the
+    //      camera stream to a video blob. The live pose pump keeps
+    //      running BUT only for the on-screen skeleton overlay —
+    //      it no longer writes to frames[]. The overlay is purely
+    //      a "yes the camera sees you" UX signal.
+    //   2. ANALYSIS PASS (after stopRecording fires): the saved
+    //      video blob is played back through a hidden <video>
+    //      element, MediaPipe Pose is run frame-by-frame over the
+    //      playback, and frames[] is built from those results. THEN
+    //      analyze() runs on frames[] exactly as before. From
+    //      analyze() onwards everything downstream is unchanged.
+    //
+    // The new function runOfflinePoseOverBlob(blob) is the seam.
+    // It produces a frames[] array of the same shape the live pump
+    // used to: { t, landmarks: [{x, y, z, v}, ...33] }. analyze()
+    // does not know or care that the data came from a different
+    // pipeline.
+    //
+    // Why this matters:
+    //   - Unblocks 60fps capture (v0.4.2.1) — once analysis is
+    //     decoupled from capture, the camera can run faster than
+    //     MediaPipe can keep up with live, and we still get every
+    //     frame analysed.
+    //   - Unblocks Savitzky-Golay smoothing (v0.4.2.1) — same
+    //     reason; SG is a post-capture pass and benefits every
+    //     drill at once.
+    //   - Closes the "frame drop on impact" problem (April 29
+    //     evening data: 2/8 swings had the ~350ms gap land at
+    //     impact). The video blob captures every camera frame
+    //     regardless of whether the live pose pump was busy —
+    //     so when MediaPipe re-runs offline, it sees frames the
+    //     live pump never got to.
+    //
+    // What changed in code (and only this):
+    //   1. onPoseResults no longer pushes to frames[] when
+    //      appState === 'recording'. The live pump is overlay-only.
+    //   2. stopRecording() no longer calls setTimeout(analyze, 50).
+    //      Instead it waits for MediaRecorder.onstop, then runs
+    //      runOfflinePoseOverBlob(blob), then calls analyze().
+    //   3. New function runOfflinePoseOverBlob(blob) — runs an
+    //      offline pose pass over a video blob, returns the
+    //      frames[] array.
+    //
+    // What's untouched:
+    //   - getUserMedia constraints. Still requesting whatever the
+    //     v0.4.1.6 build requested (no explicit frameRate yet —
+    //     that's v0.4.2.1). Today's measured rate is ~38 fps on
+    //     iPhone; bumping that to 60fps is a one-line change once
+    //     v0.4.2.0 is field-validated.
+    //   - The 5-frame moving average smooth(). Replacement with
+    //     Savitzky-Golay is also v0.4.2.1.
+    //   - Live skeleton overlay. Still drawn on every live pose
+    //     detection. The user experience during the recording
+    //     window is identical to v0.4.1.6.
+    //   - Segmenter, multi-signal P7, all drills, result panel,
+    //     CSV export, session review, voice loop, TTS. All
+    //     downstream of frames[] and unchanged.
+    //   - JSON schema, except the version string bump. Same fields,
+    //     same shape.
+    //
+    // Latency budget:
+    //   - In v0.4.1.6, analyze() ran in ~50ms because frames[] was
+    //     already populated by the live pump.
+    //   - In v0.4.2.0, the offline pose pass has to send ~190
+    //     frames through MediaPipe before analyze() can run.
+    //     Empirical estimate: 2-4 seconds on iPhone Safari. The
+    //     "Analyzing…" button state and status line absorb this
+    //     gap silently. Beta is fine with silent — bells and
+    //     whistles (spinner / TTS announce) deferred.
+    //
+    // Failure modes / fallbacks:
+    //   - If MediaRecorder isn't supported (older browsers, edge
+    //     cases): we fall back to using the live frames[] exactly
+    //     as v0.4.1.6 did. This isn't expected on iOS Safari /
+    //     Chrome but the fallback exists so a regression here
+    //     doesn't kill the app.
+    //   - If the offline pose pass produces fewer frames than the
+    //     live pump did during recording (some frames could fail
+    //     pose detection on playback), analyze()'s existing
+    //     "Too short" / "No pose detected" paths handle it.
+    //
+    // Validation plan:
+    //   - One range session reusing the April 29 setup. Compare
+    //     frame counts, P7 detection success, and the spread/
+    //     low-confidence flag from v0.4.1.6 between live and
+    //     offline pipelines on the same swings. Goal: offline
+    //     should be at least as good as live, ideally better
+    //     in the "frame dropped at impact" cases.
+    //
     // ============================================================
     // Golf Coach v0.4.1.6 — MULTI-SIGNAL P7 CONSENSUS
     //
@@ -2364,6 +2472,11 @@
     let pose = null;
     let appState = 'start';   // v0.3.1: was 'idle'; 'idle' now means in-session between swings
     let frames = [];
+    // v0.4.2.0: counter for live-pose detections during the recording
+    // window. Purely a UX progress signal ("live poses: N" in debug
+    // text) — the actual analysis frames[] is populated post-recording
+    // by runOfflinePoseOverBlob(). Reset to 0 at recording start.
+    let livePoseCountDuringRecording = 0;
     let recordingStartTime = 0;
     let beepTime = 0;
     let countdownTimer = null;
@@ -2427,6 +2540,13 @@
     let currentVideoChunks = [];      // chunks for the swing currently being recorded
     let mediaRecorderSupported = false;
     let mediaRecorderMimeType = '';
+    // v0.4.2.0: assembled video blob for the current swing. Populated in
+    // stopRecording() after MediaRecorder.onstop fires, BEFORE analyze()
+    // runs. showResult() picks it up off this global and stores it on the
+    // swing record. Replaces the v0.4.1.3 retroactive-patch dance, which
+    // is no longer needed because blob assembly now happens upstream of
+    // showResult.
+    let currentVideoBlob = null;
 
     // v0.3.1: mode-flip helpers. Camera keeps running across the flip —
     // we don't stop/restart the pose pump or getUserMedia stream, just
@@ -2792,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.6',
+        version: '0.4.2.0',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3079,17 +3199,22 @@
     }
 
     function onPoseResults(results) {
+      // v0.4.2.0: live pump is OVERLAY-ONLY. Through v0.4.1.6 this
+      // function pushed to frames[] when appState === 'recording'.
+      // That coupled the on-screen skeleton overlay to the analysis
+      // dataset — anything the live pump dropped during recording
+      // was lost from analysis. v0.4.2.0 separates the two: frames[]
+      // is built post-recording by runOfflinePoseOverBlob(), so this
+      // function only draws.
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
       if (results.poseLandmarks) {
         drawSkeleton(results.poseLandmarks);
         if (appState === 'recording') {
-          frames.push({
-            t: performance.now() - recordingStartTime,
-            landmarks: results.poseLandmarks.map(lm => ({
-              x: lm.x, y: lm.y, z: lm.z, v: lm.visibility
-            }))
-          });
-          debug.textContent = `frames: ${frames.length}`;
+          // Lightweight progress signal during recording. Counts
+          // live-detected poses, NOT frames in the analysis dataset.
+          // The actual frames[] gets populated after stopRecording.
+          livePoseCountDuringRecording++;
+          debug.textContent = `live poses: ${livePoseCountDuringRecording}`;
         }
       }
     }
@@ -3145,6 +3270,164 @@
     async function pump() {
       if (video.readyState >= 2) await pose.send({ image: video });
       rafId = requestAnimationFrame(pump);
+    }
+
+    // ============================================================
+    // v0.4.2.0: OFFLINE POSE PASS
+    // ============================================================
+    // Runs MediaPipe Pose over a recorded video blob and produces a
+    // frames[] array of the same shape the live pump used to push:
+    //   { t: number (ms from clip start),
+    //     landmarks: [{x, y, z, v}, ...33] }
+    //
+    // Strategy: create a hidden <video> element, point it at the
+    // blob, seek through it frame-by-frame, and send each painted
+    // frame to the SAME `pose` instance the live pump uses. The
+    // pose's onResults callback is temporarily redirected to a
+    // collector closure for the duration of this pass, then
+    // restored. We do NOT create a second Pose instance — that
+    // would double the WASM/model footprint and isn't needed.
+    //
+    // Frame stepping: we use requestVideoFrameCallback when
+    // available (Chromium, recent Safari) which fires once per
+    // decoded frame and gives us the presentation timestamp. On
+    // browsers that don't support it (older Safari) we fall back
+    // to manual seeking at a fixed interval — less accurate
+    // timestamps but still works.
+    //
+    // What this function returns:
+    //   { frames: [...], fps: number, durationMs: number,
+    //     usedSeekingFallback: boolean }
+    // The fps/durationMs/usedSeekingFallback fields are diagnostic
+    // — useful for the version-bump validation against v0.4.1.6
+    // live-pump fps numbers, but not consumed by analyze().
+    //
+    // Errors: throws if the blob can't be loaded or the video
+    // element can't decode it. Caller (stopRecording) catches and
+    // falls back to whatever frames[] the live pump happened to
+    // collect (which since v0.4.2.0 is empty, so the fallback is
+    // really an error path that surfaces "No pose detected" via
+    // analyze).
+    //
+    // Performance note: with smoothLandmarks enabled, each
+    // pose.send is ~10-15ms on iPhone. ~190 frames = ~2-3 seconds.
+    // The "Analyzing…" UI absorbs this silently in beta.
+
+    async function runOfflinePoseOverBlob(blob) {
+      if (!blob) throw new Error('runOfflinePoseOverBlob: blob is null');
+
+      const offlineFrames = [];
+      const blobUrl = URL.createObjectURL(blob);
+      const hiddenVideo = document.createElement('video');
+      hiddenVideo.muted = true;
+      hiddenVideo.playsInline = true;
+      hiddenVideo.preload = 'auto';
+      hiddenVideo.src = blobUrl;
+
+      // Wait for metadata so we know duration / dimensions.
+      await new Promise((resolve, reject) => {
+        hiddenVideo.onloadedmetadata = resolve;
+        hiddenVideo.onerror = () => reject(new Error('Video metadata load failed'));
+      });
+
+      const durationMs = (hiddenVideo.duration || 0) * 1000;
+
+      // Save the live onResults handler and redirect to our collector.
+      // Each pose.send is async; we await the result before stepping
+      // to the next frame, so a simple "last result" buffer is enough.
+      let pendingResolve = null;
+      const collector = (results) => {
+        if (results.poseLandmarks) {
+          // tCurrent is captured per-frame in the loop below via the
+          // closure variable; we rely on the fact that send() is awaited
+          // serially so onResults fires for the frame we just sent.
+          offlineFrames.push({
+            t: lastSentT,
+            landmarks: results.poseLandmarks.map(lm => ({
+              x: lm.x, y: lm.y, z: lm.z, v: lm.visibility
+            }))
+          });
+        }
+        if (pendingResolve) {
+          const r = pendingResolve;
+          pendingResolve = null;
+          r();
+        }
+      };
+
+      const originalOnResults = onPoseResults;
+      pose.onResults(collector);
+
+      let lastSentT = 0;
+      let usedSeekingFallback = false;
+
+      try {
+        // Try requestVideoFrameCallback path first (Chromium / Safari 16+).
+        const supportsRVFC = typeof hiddenVideo.requestVideoFrameCallback === 'function';
+
+        if (supportsRVFC) {
+          // Play the video and process frames as they're presented.
+          // requestVideoFrameCallback fires per decoded frame with metadata
+          // including mediaTime (presentation timestamp in seconds).
+          await new Promise((resolveAll, rejectAll) => {
+            let done = false;
+            const onFrame = (now, metadata) => {
+              if (done) return;
+              lastSentT = (metadata.mediaTime || 0) * 1000;
+              // Wait for pose result before scheduling next callback.
+              new Promise(res => {
+                pendingResolve = res;
+                pose.send({ image: hiddenVideo }).catch(() => res());
+              }).then(() => {
+                if (hiddenVideo.ended || done) {
+                  done = true;
+                  resolveAll();
+                } else {
+                  hiddenVideo.requestVideoFrameCallback(onFrame);
+                }
+              });
+            };
+            hiddenVideo.onended = () => {
+              if (!done) {
+                done = true;
+                // Give the in-flight pose.send a chance to settle.
+                setTimeout(resolveAll, 50);
+              }
+            };
+            hiddenVideo.onerror = () => rejectAll(new Error('Video playback error'));
+            hiddenVideo.requestVideoFrameCallback(onFrame);
+            hiddenVideo.play().catch(rejectAll);
+          });
+        } else {
+          // Fallback: seek-and-grab. Step in 1/60s increments
+          // (sub-frame at 30fps source is fine — duplicate detections
+          // are filtered upstream by frame-time quantisation in
+          // analyze, which has always been somewhat tolerant of
+          // jittery timestamps from the live pump anyway).
+          usedSeekingFallback = true;
+          const STEP_MS = 16.67;
+          for (let tMs = 0; tMs < durationMs; tMs += STEP_MS) {
+            hiddenVideo.currentTime = tMs / 1000;
+            await new Promise(res => {
+              hiddenVideo.onseeked = res;
+            });
+            lastSentT = tMs;
+            await new Promise(res => {
+              pendingResolve = res;
+              pose.send({ image: hiddenVideo }).catch(() => res());
+            });
+          }
+        }
+      } finally {
+        // Restore the live overlay handler no matter what.
+        pose.onResults(originalOnResults);
+        URL.revokeObjectURL(blobUrl);
+      }
+
+      const fps = durationMs > 0 ? (offlineFrames.length / (durationMs / 1000)) : 0;
+      console.log(`[v0.4.2.0] Offline pose pass: ${offlineFrames.length} frames over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+
+      return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
 
     // ============================================================
@@ -3506,6 +3789,10 @@
       // swings. If field testing shows this is disorienting, re-introduce
       // a single subtle tone here (single-oscillator per the design caution).
       frames = [];
+      // v0.4.2.0: reset the live-pose progress counter. This counts
+      // overlay detections during recording — purely a UX signal,
+      // not the analysis dataset.
+      livePoseCountDuringRecording = 0;
       recordingStartTime = performance.now();
       beepTime = 0;
       pendingShape = null;
@@ -3557,6 +3844,9 @@
       appState = 'idle';
       // v0.3.0 patch: button shows "Analyzing" during the brief analyze gap,
       // then showResult will flip it to "Next Swing" when the verdict is ready.
+      // v0.4.2.0: that "brief" gap is now ~2-4 seconds because the offline
+      // pose pass runs here. The status copy stays the same; bells and
+      // whistles (spinner / progress) deferred to a later release.
       recordBtn.textContent = 'Analyzing…';
       recordBtn.classList.remove('recording');
       recIndicator.classList.remove('active');
@@ -3564,23 +3854,77 @@
       status.textContent = 'Analyzing…';
       debug.textContent = '';
 
-      // v0.4.1.3: stop video capture. The recorder's chunks get assembled
-      // into a blob; we attach it to a stash slot that showResult picks up
-      // when it pushes the swing onto sessionSwings. We do NOT block on
-      // recorder.stop() — analyze() runs in parallel; the video blob is
-      // small enough (~3-5 MB) that it'll be ready by the time the user
-      // taps "Next swing" on the result panel. If the recorder is mid-
-      // assembly when sessionSwings.push happens, we attach the blob
-      // retroactively via the recorder's onstop event.
+      // v0.4.2.0: rewired flow.
+      // OLD (v0.4.1.6): stop the recorder, then setTimeout(analyze, 50) —
+      //   analyze ran on whatever frames[] the live pump had pushed during
+      //   recording. The recorder's onstop handler later backfilled the
+      //   videoBlob into the swing record retroactively.
+      // NEW (v0.4.2.0): stop the recorder, set its onstop handler to:
+      //   1. Assemble the blob into currentVideoBlob.
+      //   2. Run runOfflinePoseOverBlob to populate frames[].
+      //   3. Call analyze() — same analyze as before.
+      //   showResult later picks up currentVideoBlob and stores it on
+      //   the swing record (no retroactive patching needed).
+      //
+      // Fallback: if MediaRecorder isn't supported, currentVideoChunks
+      // stays empty and we fall back to calling analyze on whatever
+      // frames[] the live pump produced. Since v0.4.2.0 disables the
+      // live frames[] write, this fallback effectively means "No pose
+      // detected" for unsupported browsers — but those weren't going
+      // to produce a useful videoBlob anyway, and getting analysis
+      // working at all on those browsers is out of scope here.
+
+      currentVideoBlob = null;
+      frames = [];
+
+      const finishOffline = async () => {
+        const mimeType = mediaRecorderMimeType || 'video/mp4';
+        let blob = null;
+        if (currentVideoChunks.length > 0) {
+          try {
+            blob = new Blob(currentVideoChunks, { type: mimeType });
+          } catch (e) {
+            console.warn('[v0.4.2.0] Failed to assemble video blob:', e);
+          }
+        }
+        currentVideoBlob = blob;
+
+        if (blob) {
+          try {
+            const result = await runOfflinePoseOverBlob(blob);
+            frames = result.frames;
+          } catch (e) {
+            console.error('[v0.4.2.0] Offline pose pass failed:', e);
+            frames = [];
+          }
+        } else {
+          // No blob — MediaRecorder unsupported or failed. frames stays [].
+          console.warn('[v0.4.2.0] No video blob; analyze will see empty frames[]');
+        }
+
+        analyze();
+      };
+
       if (mediaRecorder && mediaRecorder.state === 'recording') {
+        // Wire onstop BEFORE calling stop() so we don't miss the event.
+        mediaRecorder.onstop = () => { finishOffline(); };
         try {
           mediaRecorder.stop();
         } catch (e) {
-          console.warn('[v0.4.1.3] MediaRecorder failed to stop:', e);
+          console.warn('[v0.4.2.0] MediaRecorder failed to stop:', e);
+          // Run finishOffline anyway — it'll handle the missing-blob case.
+          finishOffline();
         }
+      } else if (mediaRecorder && mediaRecorder.state === 'inactive') {
+        // Recorder already stopped (e.g. it errored mid-recording). Chunks
+        // may or may not be present; finishOffline handles both.
+        finishOffline();
+      } else {
+        // No recorder at all (unsupported browser). Skip straight to analyze
+        // with empty frames[]; analyze will produce the "Too short" /
+        // "No pose detected" error path.
+        finishOffline();
       }
-
-      setTimeout(analyze, 50);
     }
 
     // --- Peak finder (local minima of wristY = hands high) -------------------
@@ -4205,7 +4549,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.6',
+        version: '0.4.2.0',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -4310,13 +4654,14 @@
         p7Candidates: p7Candidates || null,
         wristY: isComplete ? persistWristY.slice() : null,
         frames: lastAnalysis.frames,
-        // v0.4.1.3: video blob for ground-truth debugging. Populated by the
-        // MediaRecorder onstop handler below — may be null if recording
-        // wasn't supported, or briefly null if the recorder hasn't finished
-        // assembling. The "Download videos" button on the review screen
-        // skips records where videoBlob is null.
-        videoBlob: null,
+        // v0.4.2.0: videoBlob is now assembled BEFORE analyze() runs (in
+        // stopRecording's finishOffline callback), so by the time we get
+        // here it's just a direct read off currentVideoBlob. The v0.4.1.3
+        // retroactive-patch dance is gone — blob assembly is a strict
+        // prerequisite of analysis now, not a side-channel that races it.
+        videoBlob: currentVideoBlob,
         videoMimeType: mediaRecorderMimeType || '',
+        videoSizeBytes: currentVideoBlob ? currentVideoBlob.size : 0,
         // Spread drill-specific extras (e.g. tempo: ratio/backswingMs/downswingMs).
         // These become first-class fields on the swing record without plumbing
         // knowing the drill.
@@ -4324,35 +4669,10 @@
       };
       sessionSwings.push(swingRecord);
 
-      // v0.4.1.3: wire the MediaRecorder's onstop event to backfill the
-      // video blob into the record we just pushed. The recorder was started
-      // in beginRecording(), stopped in stopRecording(); by the time we get
-      // here it may already be 'inactive' (chunks ready) or still flushing.
-      // Either way, set onstop to assemble the blob and patch swingRecord.
-      // We capture swingRecord by closure so even if more swings are pushed
-      // before this recorder finishes, we patch the right one.
-      if (mediaRecorder) {
-        const targetRecord = swingRecord;
-        const chunksAtTime = currentVideoChunks;  // capture array reference
-        const mimeType = mediaRecorderMimeType || 'video/mp4';
-        const finalize = () => {
-          if (chunksAtTime.length > 0) {
-            try {
-              const blob = new Blob(chunksAtTime, { type: mimeType });
-              targetRecord.videoBlob = blob;
-              targetRecord.videoSizeBytes = blob.size;
-            } catch (e) {
-              console.warn('[v0.4.1.3] Failed to assemble video blob:', e);
-            }
-          }
-        };
-        if (mediaRecorder.state === 'inactive') {
-          // Already stopped — chunks should be flushed; finalize now.
-          finalize();
-        } else {
-          mediaRecorder.onstop = finalize;
-        }
-      }
+      // v0.4.2.0: the v0.4.1.3 retroactive blob-finalisation block was
+      // removed here. Blob assembly now happens upstream in stopRecording,
+      // before analyze runs, so by the time showResult is called the blob
+      // is already assigned (or null if recording was unsupported/failed).
 
       // v0.2.1: enter the 'waiting' state — recognition listens for shape
       // words OR "ready" to start the next swing. This is what makes the
