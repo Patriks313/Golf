@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.6</title>
+  <title>Golf Coach — v0.4.2.0.7</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.6',
+        version: '0.4.2.0.7',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3316,7 +3316,7 @@
     async function runOfflinePoseOverBlob(blob) {
       if (!blob) throw new Error('runOfflinePoseOverBlob: blob is null');
 
-      console.log('[v0.4.2.0.6] offline pose: starting, blob size=' + blob.size);
+      console.log('[v0.4.2.0.7] offline pose: starting, blob size=' + blob.size);
 
       const offlineFrames = [];
       const blobUrl = URL.createObjectURL(blob);
@@ -3340,21 +3340,27 @@
       // If metadata doesn't load, we proceed anyway and let the seek loop
       // handle whatever it finds; worst case we collect zero frames and
       // analyze() reports "no pose detected" instead of freezing forever.
-      console.log('[v0.4.2.0.6] offline pose: waiting for metadata');
+      console.log('[v0.4.2.0.7] offline pose: waiting for metadata');
+      if (typeof status !== 'undefined' && status) {
+        status.textContent = 'Analyzing… (3/4 loading video metadata)';
+      }
       await new Promise((resolve) => {
         let settled = false;
         const done = () => { if (!settled) { settled = true; resolve(); } };
         hiddenVideo.onloadedmetadata = done;
         hiddenVideo.onerror = () => {
-          console.warn('[v0.4.2.0.6] offline pose: video error during metadata load');
+          console.warn('[v0.4.2.0.7] offline pose: video error during metadata load');
           done();
         };
         setTimeout(() => {
-          if (!settled) console.warn('[v0.4.2.0.6] offline pose: metadata timeout after 2s, proceeding anyway');
+          if (!settled) console.warn('[v0.4.2.0.7] offline pose: metadata timeout after 2s, proceeding anyway');
           done();
         }, 2000);
       });
-      console.log('[v0.4.2.0.6] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
+      console.log('[v0.4.2.0.7] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
+      if (typeof status !== 'undefined' && status) {
+        status.textContent = 'Analyzing… (3/4 metadata done dur=' + hiddenVideo.duration + ' extracting…)';
+      }
 
       // v0.4.2.0.3: hiddenVideo.duration is unreliable for MediaRecorder blobs
       // on iOS Safari (often Infinity or NaN until played to end). Read it but
@@ -3500,7 +3506,10 @@
 
           lastSentT = tMs;
           if (offlineFrames.length % 10 === 0) {
-            console.log('[v0.4.2.0.6] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
+            console.log('[v0.4.2.0.7] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
+            if (typeof status !== 'undefined' && status) {
+              status.textContent = 'Analyzing… (3/4 ' + offlineFrames.length + ' frames extracted)';
+            }
           }
 
           // v0.4.2.0.6: draw the current video frame to the off-screen canvas,
@@ -3560,7 +3569,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.6] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.7] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4013,6 +4022,11 @@
       frames = [];
 
       const finishOffline = async () => {
+        // v0.4.2.0.7: visible on-screen diagnostics. iOS Safari has no
+        // dev-tools console accessible to the user during testing, so
+        // we surface each phase boundary into the status text. If the
+        // text stops updating, the phase shown is where we got stuck.
+        status.textContent = 'Analyzing… (1/4 assembling video)';
         const mimeType = mediaRecorderMimeType || 'video/mp4';
         let blob = null;
         if (currentVideoChunks.length > 0) {
@@ -4026,15 +4040,19 @@
 
         if (blob) {
           try {
+            status.textContent = 'Analyzing… (2/4 starting pose extraction, blob=' + Math.round(blob.size/1024) + 'KB)';
             const result = await runOfflinePoseOverBlob(blob);
             frames = result.frames;
+            status.textContent = 'Analyzing… (4/4 got ' + frames.length + ' frames, scoring)';
           } catch (e) {
             console.error('[v0.4.2.0] Offline pose pass failed:', e);
+            status.textContent = 'Analyzing… (offline pose threw: ' + (e && e.message || e) + ')';
             frames = [];
           }
         } else {
           // No blob — MediaRecorder unsupported or failed. frames stays [].
           console.warn('[v0.4.2.0] No video blob; analyze will see empty frames[]');
+          status.textContent = 'Analyzing… (no video blob captured)';
         }
 
         analyze();
@@ -4684,7 +4702,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.6',
+        version: '0.4.2.0.7',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
