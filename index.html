@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.2</title>
+  <title>Golf Coach — v0.4.2.0.3</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.2',
+        version: '0.4.2.0.3',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3330,7 +3330,11 @@
         hiddenVideo.onerror = () => reject(new Error('Video metadata load failed'));
       });
 
-      const durationMs = (hiddenVideo.duration || 0) * 1000;
+      // v0.4.2.0.3: hiddenVideo.duration is unreliable for MediaRecorder blobs
+      // on iOS Safari (often Infinity or NaN until played to end). Read it but
+      // don't trust it as the loop bound.
+      const durationFromMetadata = (hiddenVideo.duration || 0) * 1000;
+      const durationFinite = Number.isFinite(durationFromMetadata) && durationFromMetadata > 0;
 
       // Save the live onResults handler and redirect to our collector.
       // Each pose.send is async; we await the result before stepping
@@ -3381,21 +3385,71 @@
         // We sample at 33.33ms (30fps) which matches MediaRecorder's nominal
         // output rate; finer steps just produce duplicate frames that the
         // segmenter has to dedupe.
+        //
+        // v0.4.2.0.3: hardened against iOS Safari quirks observed during
+        // first v0.4.2.0.2 field test:
+        //   - hiddenVideo.duration may be Infinity/NaN for MediaRecorder
+        //     blobs until played to end → don't use it as a loop bound.
+        //   - If currentTime is already at the requested value, 'seeked'
+        //     may not fire → wrap each seek in a timeout.
+        //   - Stop when seeking past the end (currentTime stops advancing
+        //     OR we've gone way past metadata duration if it was finite).
         usedSeekingFallback = true;
         const STEP_MS = 33.33;
-        for (let tMs = 0; tMs < durationMs; tMs += STEP_MS) {
-          hiddenVideo.currentTime = tMs / 1000;
-          await new Promise(res => {
-            const onSeeked = () => {
-              hiddenVideo.removeEventListener('seeked', onSeeked);
-              res();
-            };
-            hiddenVideo.addEventListener('seeked', onSeeked);
-          });
+        const SEEK_TIMEOUT_MS = 1000;
+        const HARD_CAP_MS = durationFinite
+          ? durationFromMetadata + 200
+          : 30000;  // 30s absolute ceiling for one swing video
+        let prevCurrentTime = -1;
+        let stagnantSeeks = 0;
+
+        for (let tMs = 0; tMs < HARD_CAP_MS; tMs += STEP_MS) {
+          const targetSec = tMs / 1000;
+          // Skip the seek wait if we're already at the target (within half a frame)
+          const alreadyThere = Math.abs(hiddenVideo.currentTime - targetSec) < 0.016;
+          if (!alreadyThere) {
+            await new Promise(res => {
+              let settled = false;
+              const onSeeked = () => {
+                if (settled) return;
+                settled = true;
+                hiddenVideo.removeEventListener('seeked', onSeeked);
+                res();
+              };
+              hiddenVideo.addEventListener('seeked', onSeeked);
+              hiddenVideo.currentTime = targetSec;
+              // Timeout in case 'seeked' doesn't fire (iOS Safari edge cases).
+              setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                hiddenVideo.removeEventListener('seeked', onSeeked);
+                res();
+              }, SEEK_TIMEOUT_MS);
+            });
+          }
+
+          // End-of-video detection: currentTime stopped advancing.
+          if (Math.abs(hiddenVideo.currentTime - prevCurrentTime) < 0.001) {
+            stagnantSeeks++;
+            if (stagnantSeeks >= 3) break;
+          } else {
+            stagnantSeeks = 0;
+          }
+          prevCurrentTime = hiddenVideo.currentTime;
+
           lastSentT = tMs;
           await new Promise(res => {
             pendingResolve = res;
-            pose.send({ image: hiddenVideo }).catch(() => res());
+            let settled = false;
+            const wrap = () => { if (!settled) { settled = true; res(); } };
+            pendingResolve = wrap;
+            try {
+              pose.send({ image: hiddenVideo }).catch(() => wrap());
+            } catch (e) {
+              wrap();
+            }
+            // Hard timeout in case pose.send() never returns a result.
+            setTimeout(wrap, SEEK_TIMEOUT_MS);
           });
         }
       } finally {
@@ -3404,6 +3458,11 @@
         URL.revokeObjectURL(blobUrl);
       }
 
+      // Use the actual last frame's t as durationMs for diagnostics if metadata was bad.
+      const durationMs = offlineFrames.length > 0
+        ? offlineFrames[offlineFrames.length - 1].t
+        : durationFromMetadata;
+
       const fps = durationMs > 0 ? (offlineFrames.length / (durationMs / 1000)) : 0;
       // v0.4.2.0.1: surface unique-t count alongside total. After the fix,
       // unique-t should equal offlineFrames.length on every swing (synthetic
@@ -3411,7 +3470,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.2] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.3] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4535,7 +4594,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.2',
+        version: '0.4.2.0.3',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
