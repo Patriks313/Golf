@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0</title>
+  <title>Golf Coach — v0.4.2.0.1</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0',
+        version: '0.4.2.0.1',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3367,13 +3367,32 @@
 
         if (supportsRVFC) {
           // Play the video and process frames as they're presented.
-          // requestVideoFrameCallback fires per decoded frame with metadata
-          // including mediaTime (presentation timestamp in seconds).
+          // requestVideoFrameCallback fires per decoded frame.
+          //
+          // v0.4.2.0.1 FIX: do NOT trust metadata.mediaTime on iOS Safari.
+          // Field testing (Apr 30 2026) showed iOS Safari rVFC returns stale
+          // mediaTime values during MediaRecorder blob playback — multiple
+          // distinct decoded frames arrive stamped with the same mediaTime,
+          // producing 50-65% duplicate-t frames in the output and wild
+          // landmark jitter when the segmenter indexes by frame number.
+          // Diagnosis: a 219-frame swing produced only 85 unique mediaTime
+          // values, with up to 5 distinct frames sharing one timestamp.
+          //
+          // Fix: assign timestamps from a synthetic counter
+          //   t_n = n * (1000 / RVFC_FPS_ASSUMPTION)
+          // RVFC_FPS_ASSUMPTION = 30 matches MediaRecorder's nominal output
+          // rate on iOS Safari. If the source fps differs, absolute
+          // timestamps drift but per-frame relative ordering and spacing
+          // stay correct, which is all the segmenter needs.
+          const RVFC_FPS_ASSUMPTION = 30;
+          const RVFC_DT_MS = 1000 / RVFC_FPS_ASSUMPTION;
+          let frameCounter = 0;
           await new Promise((resolveAll, rejectAll) => {
             let done = false;
             const onFrame = (now, metadata) => {
               if (done) return;
-              lastSentT = (metadata.mediaTime || 0) * 1000;
+              lastSentT = frameCounter * RVFC_DT_MS;
+              frameCounter++;
               // Wait for pose result before scheduling next callback.
               new Promise(res => {
                 pendingResolve = res;
@@ -3425,7 +3444,13 @@
       }
 
       const fps = durationMs > 0 ? (offlineFrames.length / (durationMs / 1000)) : 0;
-      console.log(`[v0.4.2.0] Offline pose pass: ${offlineFrames.length} frames over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      // v0.4.2.0.1: surface unique-t count alongside total. After the fix,
+      // unique-t should equal offlineFrames.length on every swing (synthetic
+      // counter guarantees monotonic distinct timestamps). If they ever
+      // disagree, something pushed two frames into offlineFrames within the
+      // same await tick — investigate.
+      const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
+      console.log(`[v0.4.2.0.1] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4549,7 +4574,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0',
+        version: '0.4.2.0.1',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
