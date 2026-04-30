@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.8</title>
+  <title>Golf Coach — v0.4.2.0.9</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.8',
+        version: '0.4.2.0.9',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3316,7 +3316,7 @@
     async function runOfflinePoseOverBlob(blob) {
       if (!blob) throw new Error('runOfflinePoseOverBlob: blob is null');
 
-      console.log('[v0.4.2.0.8] offline pose: starting, blob size=' + blob.size);
+      console.log('[v0.4.2.0.9] offline pose: starting, blob size=' + blob.size);
 
       const offlineFrames = [];
       const blobUrl = URL.createObjectURL(blob);
@@ -3340,7 +3340,7 @@
       // If metadata doesn't load, we proceed anyway and let the seek loop
       // handle whatever it finds; worst case we collect zero frames and
       // analyze() reports "no pose detected" instead of freezing forever.
-      console.log('[v0.4.2.0.8] offline pose: waiting for metadata');
+      console.log('[v0.4.2.0.9] offline pose: waiting for metadata');
       if (typeof status !== 'undefined' && status) {
         status.textContent = 'Analyzing… (3/4 loading video metadata)';
       }
@@ -3349,15 +3349,15 @@
         const done = () => { if (!settled) { settled = true; resolve(); } };
         hiddenVideo.onloadedmetadata = done;
         hiddenVideo.onerror = () => {
-          console.warn('[v0.4.2.0.8] offline pose: video error during metadata load');
+          console.warn('[v0.4.2.0.9] offline pose: video error during metadata load');
           done();
         };
         setTimeout(() => {
-          if (!settled) console.warn('[v0.4.2.0.8] offline pose: metadata timeout after 2s, proceeding anyway');
+          if (!settled) console.warn('[v0.4.2.0.9] offline pose: metadata timeout after 2s, proceeding anyway');
           done();
         }, 2000);
       });
-      console.log('[v0.4.2.0.8] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
+      console.log('[v0.4.2.0.9] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
       if (typeof status !== 'undefined' && status) {
         status.textContent = 'Analyzing… (3/4 metadata done dur=' + hiddenVideo.duration + ' extracting…)';
       }
@@ -3391,25 +3391,38 @@
         }
       };
 
-      const originalOnResults = onPoseResults;
-      pose.onResults(collector);
-
-      // v0.4.2.0.5: PAUSE THE LIVE POSE PUMP during the offline pass.
-      // Without this, the live camera's requestAnimationFrame pump keeps
-      // calling pose.send(image: video) on every camera frame in the
-      // background, and every result hits our collector — stamped with
-      // whatever lastSentT the seek loop happens to be on. Field testing
-      // of v0.4.2.0.3 showed this produced 32-34 duplicate frames per
-      // unique seek timestamp (628 frames over 19 unique t values, all
-      // smoothly varying landmarks within a t group = the live pump still
-      // running). MediaPipe's WASM worker keeps consuming camera frames
-      // even while the JS thread awaits seek/pose, so blocking JS isn't
-      // enough — we have to stop scheduling new live sends.
-      const wasPumping = (rafId !== null);
-      if (wasPumping) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
+      // v0.4.2.0.9: build a SEPARATE Pose instance for the offline pass.
+      // Previous attempts shared the live `pose` instance with the camera
+      // pump, redirecting onResults and pausing the pump. v0.4.2.0.8
+      // produced iter=135 sent=134 got=0 — pose.send was being called but
+      // results never came back. Possible cause: MediaPipe's WASM has
+      // internal queue/state coupled to the live camera stream; offline
+      // sends queue but never emit results. A fresh instance has no
+      // shared state, no queue contamination, no smoothing model trained
+      // on the live stream. Also turn smoothLandmarks OFF: smoothing
+      // assumes successive frames from the same source, which doesn't
+      // hold when we're stepping through a separate blob.
+      console.log('[v0.4.2.0.9] offline pose: creating fresh Pose instance');
+      if (typeof status !== 'undefined' && status) {
+        status.textContent = 'Analyzing… (2.5/4 init pose model)';
       }
+      const offlinePose = new Pose({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+      });
+      offlinePose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: false,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      offlinePose.onResults(collector);
+      try {
+        if (offlinePose.initialize) await offlinePose.initialize();
+      } catch (e) {
+        console.warn('[v0.4.2.0.9] offline pose: initialize threw, proceeding', e);
+      }
+      console.log('[v0.4.2.0.9] offline pose: instance ready');
 
       // v0.4.2.0.6: on iOS Safari, pose.send({ image: hiddenVideo }) returns
       // zero results when hiddenVideo is a paused-and-seeked element backed by
@@ -3509,7 +3522,7 @@
           lastSentT = tMs;
           loopIterations++;
           if (loopIterations % 5 === 0 || (loopIterations < 20 && loopIterations % 2 === 0)) {
-            console.log('[v0.4.2.0.8] iter=' + loopIterations + ' sent=' + posesSent + ' received=' + offlineFrames.length);
+            console.log('[v0.4.2.0.9] iter=' + loopIterations + ' sent=' + posesSent + ' received=' + offlineFrames.length);
             if (typeof status !== 'undefined' && status) {
               status.textContent = 'Analyzing… (3/4 iter=' + loopIterations + ' sent=' + posesSent + ' got=' + offlineFrames.length + ')';
             }
@@ -3566,7 +3579,7 @@
             const wrap = () => { if (!settled) { settled = true; res(); } };
             pendingResolve = wrap;
             try {
-              pose.send({ image: poseInput }).catch(() => wrap());
+              offlinePose.send({ image: poseInput }).catch(() => wrap());
             } catch (e) {
               wrap();
             }
@@ -3580,17 +3593,14 @@
           }
         }
       } finally {
-        // Restore the live overlay handler no matter what.
-        pose.onResults(originalOnResults);
+        // v0.4.2.0.9: dispose the offline instance. The live `pose` instance
+        // was never touched — its onResults still points at onPoseResults
+        // (the live overlay handler) and the pump never stopped.
+        try { offlinePose.close(); } catch (e) {}
         URL.revokeObjectURL(blobUrl);
         // Remove the hidden video element from the DOM.
         if (hiddenVideo.parentNode) {
           hiddenVideo.parentNode.removeChild(hiddenVideo);
-        }
-        // v0.4.2.0.5: restart the live pose pump now that the offline pass
-        // is done. The next pump() call will reschedule itself via rAF.
-        if (wasPumping && rafId === null) {
-          pump();
         }
       }
 
@@ -3606,7 +3616,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.8] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.9] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4739,7 +4749,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.8',
+        version: '0.4.2.0.9',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
