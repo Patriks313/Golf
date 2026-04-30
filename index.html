@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.7</title>
+  <title>Golf Coach — v0.4.1.8</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -997,11 +997,20 @@
       </div>
 
       <div class="review-actions">
+        <!-- v0.4.1.8: button rework. Two download paths exposed:
+             1. "Download bundle (videos+JSON)" — ZIP with all videos
+                + session JSON. Primary action for handing off a
+                session for offline analysis.
+             2. "Download JSON" — JSON only, no size limit concern.
+                Useful when MediaRecorder is unsupported, or for
+                quick metric-only inspections, or when sessions
+                exceed the user's transport size limit (e.g. email
+                attachments) and they only need the numbers.
+             CSV download stays for backwards compat / spreadsheet
+             use. -->
+        <button id="review-export-videos-btn" style="display:none;">Download bundle (videos+JSON)</button>
+        <button id="review-export-raw-btn">Download JSON</button>
         <button id="review-export-btn">Download session CSV</button>
-        <button id="review-export-raw-btn">Download raw data (JSON)</button>
-        <!-- v0.4.1.3: dev tool for ground-truth segmenter debugging.
-             Shown only when session has at least one captured video. -->
-        <button id="review-export-videos-btn" style="display:none;">Download videos</button>
         <button id="review-discard-btn">Discard and end</button>
       </div>
     </div>
@@ -1081,6 +1090,62 @@
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
 
   <script>
+    // ============================================================
+    // Golf Coach v0.4.1.8 — REVIEW-SCREEN BUTTON CLEANUP
+    //
+    // UX patch on top of v0.4.1.7. Field testing of v0.4.1.7
+    // surfaced three issues with the review screen:
+    //
+    //   1. Two buttons did almost the same thing. "Download raw
+    //      data (JSON)" and "Download videos" overlapped because
+    //      the videos download is now a ZIP that already contains
+    //      the JSON. Two buttons + an order requirement (Patrik
+    //      reported having to click JSON first to be able to click
+    //      videos, likely an iOS user-gesture chain quirk) is
+    //      worse than a single decisive action.
+    //
+    //   2. ZIP generation has a delay with no feedback. JSZip is
+    //      CPU-bound and takes a few seconds for ~30-50 MB of
+    //      video on iPhone. v0.4.1.7 left the button looking
+    //      static during this, which reads as "didn't register."
+    //
+    //   3. The "videos" button label didn't reflect that JSON
+    //      ships in the same archive. Users who only wanted JSON
+    //      didn't know they could just hit the videos button and
+    //      get JSON for free.
+    //
+    // Fixes in v0.4.1.8:
+    //
+    //   1. Two clear download paths:
+    //        "Download bundle (videos+JSON, N)" — single ZIP with
+    //          all videos plus session.json. Hidden if no videos
+    //          captured (MediaRecorder unsupported).
+    //        "Download JSON" — JSON only. Always available.
+    //          Use when the bundle exceeds your transport's size
+    //          limit (e.g. 25 MB email attachment cap), or when
+    //          you only need the numbers.
+    //      CSV button kept as-is; it's small and sometimes useful
+    //      for spreadsheet-style review.
+    //
+    //   2. "Bundling N swings…" feedback during zip generation.
+    //      Button is disabled and label changes while JSZip works,
+    //      restored on completion (or on error). User now sees
+    //      progress instead of guessing.
+    //
+    //   3. Bundle button label shows "(videos+JSON, N)" so it's
+    //      clear what's inside.
+    //
+    // What's untouched:
+    //   - Pose pipeline, segmenter, all drills.
+    //   - The v0.4.1.7 closure fix (each swing's onstop wires on
+    //     locally-captured refs, not the global). All swings
+    //     should still end up with videoBlob populated.
+    //   - JSON / ZIP file format. JSON inside the ZIP is identical
+    //     to standalone JSON. session-<TS>/ folder structure
+    //     unchanged.
+    //   - The legacy sequential-download fallback path stays
+    //     wired in case JSZip fails to load.
+    //
     // ============================================================
     // Golf Coach v0.4.1.7 — DOWNLOAD-ALL-VIDEOS FIX
     //
@@ -2581,15 +2646,22 @@
       reviewTableSection.style.display = '';
       reviewEmptyState.style.display = 'none';
       reviewExportBtn.style.display = '';
-      // v0.4.1.3: show "Download videos" button only if at least one swing
-      // actually has a captured video. If MediaRecorder was unsupported,
-      // every videoBlob is null and we hide the button entirely — no point
-      // showing a control that produces nothing.
+      // v0.4.1.8: show "Download bundle" button only if at least one
+      // swing actually has a captured video. If MediaRecorder was
+      // unsupported (or every recorder failed), every videoBlob is null
+      // and we hide the button entirely — JSON-only download is still
+      // available via the separate JSON button.
+      //
+      // Label shows swing count. With the v0.4.1.7 closure fix, all
+      // swings should now have videos when MediaRecorder is supported,
+      // so the "X/Y" partial-completion display from v0.4.1.3 is gone —
+      // if anything is missing it's a real bug we want to see, not an
+      // expected partial state.
       const swingsWithVideo = swings.filter(s => s.videoBlob).length;
       reviewExportVideosBtn.style.display = swingsWithVideo > 0 ? '' : 'none';
       reviewExportVideosBtn.textContent = swingsWithVideo === n
-        ? `Download videos (${n})`
-        : `Download videos (${swingsWithVideo}/${n})`;
+        ? `Download bundle (videos+JSON, ${n})`
+        : `Download bundle (videos+JSON, ${swingsWithVideo}/${n})`;
 
       // --- Aggregate summary -------------------------------------------
       // v0.4.0: drill provides its own summary stat (e.g. tempo: "avg
@@ -2870,7 +2942,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.7',
+        version: '0.4.1.8',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -2969,6 +3041,16 @@
       const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const bundleName = `session-${stamp}`;
 
+      // v0.4.1.8: button-state feedback during zip generation. On a 10-swing
+      // session (~30-50 MB) this takes a few seconds on iPhone — JSZip walks
+      // every file and writes a zip stream in JavaScript, which is CPU-bound.
+      // Without feedback the user thinks the button didn't register; with
+      // feedback they know it's working. We restore the original label in a
+      // finally block so the button comes back regardless of success/error.
+      const originalLabel = reviewExportVideosBtn.textContent;
+      reviewExportVideosBtn.textContent = `Bundling ${withVideo.length} swings…`;
+      reviewExportVideosBtn.disabled = true;
+
       try {
         const zip = new JSZip();
         const folder = zip.folder(bundleName);
@@ -3004,6 +3086,11 @@
       } catch (e) {
         console.warn('[v0.4.1.7] ZIP bundling failed; falling back to sequential downloads:', e);
         exportSessionVideosLegacy(withVideo);
+      } finally {
+        // v0.4.1.8: restore button regardless of success/failure so the
+        // user can retry without having to discard the session.
+        reviewExportVideosBtn.textContent = originalLabel;
+        reviewExportVideosBtn.disabled = false;
       }
     }
 
@@ -3012,7 +3099,7 @@
     // round-tripping through a download. Mirrors exportSessionRawJSON.
     function buildSessionJsonPayload() {
       return {
-        version: '0.4.1.7',
+        version: '0.4.1.8',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -4451,7 +4538,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.7',
+        version: '0.4.1.8',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
