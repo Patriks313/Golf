@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.5</title>
+  <title>Golf Coach — v0.4.2.0.6</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.5',
+        version: '0.4.2.0.6',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3316,7 +3316,7 @@
     async function runOfflinePoseOverBlob(blob) {
       if (!blob) throw new Error('runOfflinePoseOverBlob: blob is null');
 
-      console.log('[v0.4.2.0.5] offline pose: starting, blob size=' + blob.size);
+      console.log('[v0.4.2.0.6] offline pose: starting, blob size=' + blob.size);
 
       const offlineFrames = [];
       const blobUrl = URL.createObjectURL(blob);
@@ -3340,21 +3340,21 @@
       // If metadata doesn't load, we proceed anyway and let the seek loop
       // handle whatever it finds; worst case we collect zero frames and
       // analyze() reports "no pose detected" instead of freezing forever.
-      console.log('[v0.4.2.0.5] offline pose: waiting for metadata');
+      console.log('[v0.4.2.0.6] offline pose: waiting for metadata');
       await new Promise((resolve) => {
         let settled = false;
         const done = () => { if (!settled) { settled = true; resolve(); } };
         hiddenVideo.onloadedmetadata = done;
         hiddenVideo.onerror = () => {
-          console.warn('[v0.4.2.0.5] offline pose: video error during metadata load');
+          console.warn('[v0.4.2.0.6] offline pose: video error during metadata load');
           done();
         };
         setTimeout(() => {
-          if (!settled) console.warn('[v0.4.2.0.5] offline pose: metadata timeout after 2s, proceeding anyway');
+          if (!settled) console.warn('[v0.4.2.0.6] offline pose: metadata timeout after 2s, proceeding anyway');
           done();
         }, 2000);
       });
-      console.log('[v0.4.2.0.5] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
+      console.log('[v0.4.2.0.6] offline pose: metadata phase done, duration=' + hiddenVideo.duration);
 
       // v0.4.2.0.3: hiddenVideo.duration is unreliable for MediaRecorder blobs
       // on iOS Safari (often Infinity or NaN until played to end). Read it but
@@ -3404,6 +3404,24 @@
         cancelAnimationFrame(rafId);
         rafId = null;
       }
+
+      // v0.4.2.0.6: on iOS Safari, pose.send({ image: hiddenVideo }) returns
+      // zero results when hiddenVideo is a paused-and-seeked element backed by
+      // a blob URL. Field test of v0.4.2.0.5 produced 0 frames over a 6MB
+      // recorded video that was seeking correctly. The standard MediaPipe
+      // workaround on iOS is to draw each frame to an off-screen canvas
+      // (which materialises pixels into a known-good ImageBitmap-compatible
+      // surface) and pass the canvas to pose.send instead of the video.
+      // Live pump works without this because that <video> is actively
+      // playing from a MediaStream — different code path inside WebKit.
+      const offscreenCanvas = document.createElement('canvas');
+      // Size the canvas from the video's actual decoded dimensions. If
+      // metadata didn't load, videoWidth/videoHeight are 0; we fall back
+      // to a reasonable default which the first successful seek will
+      // overwrite via re-sizing on demand.
+      offscreenCanvas.width = hiddenVideo.videoWidth || 640;
+      offscreenCanvas.height = hiddenVideo.videoHeight || 480;
+      const offscreenCtx = offscreenCanvas.getContext('2d');
 
       let lastSentT = 0;
       let usedSeekingFallback = false;
@@ -3482,15 +3500,32 @@
 
           lastSentT = tMs;
           if (offlineFrames.length % 10 === 0) {
-            console.log('[v0.4.2.0.5] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
+            console.log('[v0.4.2.0.6] offline pose: collected ' + offlineFrames.length + ' frames so far (t=' + tMs.toFixed(0) + 'ms)');
           }
+
+          // v0.4.2.0.6: draw the current video frame to the off-screen canvas,
+          // then pass the canvas (not the video) to pose.send. Required for
+          // iOS Safari blob-video compatibility; harmless on Chromium.
+          // Re-size canvas if the video dimensions only became known after
+          // the first successful seek.
+          if (offscreenCanvas.width !== hiddenVideo.videoWidth && hiddenVideo.videoWidth > 0) {
+            offscreenCanvas.width = hiddenVideo.videoWidth;
+            offscreenCanvas.height = hiddenVideo.videoHeight;
+          }
+          try {
+            offscreenCtx.drawImage(hiddenVideo, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+          } catch (e) {
+            // drawImage can throw if the video isn't ready; skip this frame.
+            continue;
+          }
+
           await new Promise(res => {
             pendingResolve = res;
             let settled = false;
             const wrap = () => { if (!settled) { settled = true; res(); } };
             pendingResolve = wrap;
             try {
-              pose.send({ image: hiddenVideo }).catch(() => wrap());
+              pose.send({ image: offscreenCanvas }).catch(() => wrap());
             } catch (e) {
               wrap();
             }
@@ -3525,7 +3560,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.5] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.6] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4649,7 +4684,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.5',
+        version: '0.4.2.0.6',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
