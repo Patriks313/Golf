@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.2.0.1</title>
+  <title>Golf Coach — v0.4.2.0.2</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2912,7 +2912,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.2.0.1',
+        version: '0.4.2.0.2',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3362,80 +3362,41 @@
       let usedSeekingFallback = false;
 
       try {
-        // Try requestVideoFrameCallback path first (Chromium / Safari 16+).
-        const supportsRVFC = typeof hiddenVideo.requestVideoFrameCallback === 'function';
-
-        if (supportsRVFC) {
-          // Play the video and process frames as they're presented.
-          // requestVideoFrameCallback fires per decoded frame.
-          //
-          // v0.4.2.0.1 FIX: do NOT trust metadata.mediaTime on iOS Safari.
-          // Field testing (Apr 30 2026) showed iOS Safari rVFC returns stale
-          // mediaTime values during MediaRecorder blob playback — multiple
-          // distinct decoded frames arrive stamped with the same mediaTime,
-          // producing 50-65% duplicate-t frames in the output and wild
-          // landmark jitter when the segmenter indexes by frame number.
-          // Diagnosis: a 219-frame swing produced only 85 unique mediaTime
-          // values, with up to 5 distinct frames sharing one timestamp.
-          //
-          // Fix: assign timestamps from a synthetic counter
-          //   t_n = n * (1000 / RVFC_FPS_ASSUMPTION)
-          // RVFC_FPS_ASSUMPTION = 30 matches MediaRecorder's nominal output
-          // rate on iOS Safari. If the source fps differs, absolute
-          // timestamps drift but per-frame relative ordering and spacing
-          // stay correct, which is all the segmenter needs.
-          const RVFC_FPS_ASSUMPTION = 30;
-          const RVFC_DT_MS = 1000 / RVFC_FPS_ASSUMPTION;
-          let frameCounter = 0;
-          await new Promise((resolveAll, rejectAll) => {
-            let done = false;
-            const onFrame = (now, metadata) => {
-              if (done) return;
-              lastSentT = frameCounter * RVFC_DT_MS;
-              frameCounter++;
-              // Wait for pose result before scheduling next callback.
-              new Promise(res => {
-                pendingResolve = res;
-                pose.send({ image: hiddenVideo }).catch(() => res());
-              }).then(() => {
-                if (hiddenVideo.ended || done) {
-                  done = true;
-                  resolveAll();
-                } else {
-                  hiddenVideo.requestVideoFrameCallback(onFrame);
-                }
-              });
+        // v0.4.2.0.2: rVFC path REMOVED. Two separate iOS Safari bugs were
+        // observed during Apr 30 field testing of v0.4.2.0 and v0.4.2.0.1:
+        //   1. metadata.mediaTime returns stale values during MediaRecorder
+        //      blob playback — multiple distinct decoded frames stamped with
+        //      the same mediaTime (v0.4.2.0).
+        //   2. MediaPipe's pose.send() pipelines results internally; the
+        //      "wait for result before scheduling next rVFC callback" pattern
+        //      doesn't actually serialize. Callback N+1's pendingResolve
+        //      fires on callback N's result, so multiple distinct frames
+        //      get pushed to offlineFrames with the same synthetic timestamp
+        //      (v0.4.2.0.1, ~38-48% unique-t).
+        //
+        // The seek path (currentTime = X; await onseeked; pose.send()) is
+        // strictly serial by construction — onseeked cannot fire until the
+        // exact requested currentTime is decoded and presented. Slower than
+        // a working rVFC would have been, but deterministic and correct.
+        // We sample at 33.33ms (30fps) which matches MediaRecorder's nominal
+        // output rate; finer steps just produce duplicate frames that the
+        // segmenter has to dedupe.
+        usedSeekingFallback = true;
+        const STEP_MS = 33.33;
+        for (let tMs = 0; tMs < durationMs; tMs += STEP_MS) {
+          hiddenVideo.currentTime = tMs / 1000;
+          await new Promise(res => {
+            const onSeeked = () => {
+              hiddenVideo.removeEventListener('seeked', onSeeked);
+              res();
             };
-            hiddenVideo.onended = () => {
-              if (!done) {
-                done = true;
-                // Give the in-flight pose.send a chance to settle.
-                setTimeout(resolveAll, 50);
-              }
-            };
-            hiddenVideo.onerror = () => rejectAll(new Error('Video playback error'));
-            hiddenVideo.requestVideoFrameCallback(onFrame);
-            hiddenVideo.play().catch(rejectAll);
+            hiddenVideo.addEventListener('seeked', onSeeked);
           });
-        } else {
-          // Fallback: seek-and-grab. Step in 1/60s increments
-          // (sub-frame at 30fps source is fine — duplicate detections
-          // are filtered upstream by frame-time quantisation in
-          // analyze, which has always been somewhat tolerant of
-          // jittery timestamps from the live pump anyway).
-          usedSeekingFallback = true;
-          const STEP_MS = 16.67;
-          for (let tMs = 0; tMs < durationMs; tMs += STEP_MS) {
-            hiddenVideo.currentTime = tMs / 1000;
-            await new Promise(res => {
-              hiddenVideo.onseeked = res;
-            });
-            lastSentT = tMs;
-            await new Promise(res => {
-              pendingResolve = res;
-              pose.send({ image: hiddenVideo }).catch(() => res());
-            });
-          }
+          lastSentT = tMs;
+          await new Promise(res => {
+            pendingResolve = res;
+            pose.send({ image: hiddenVideo }).catch(() => res());
+          });
         }
       } finally {
         // Restore the live overlay handler no matter what.
@@ -3450,7 +3411,7 @@
       // disagree, something pushed two frames into offlineFrames within the
       // same await tick — investigate.
       const uniqueTs = new Set(offlineFrames.map(f => f.t)).size;
-      console.log(`[v0.4.2.0.1] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
+      console.log(`[v0.4.2.0.2] Offline pose pass: ${offlineFrames.length} frames (${uniqueTs} unique t) over ${durationMs.toFixed(0)}ms (~${fps.toFixed(1)} fps)${usedSeekingFallback ? ' [seek-fallback]' : ''}`);
 
       return { frames: offlineFrames, fps, durationMs, usedSeekingFallback };
     }
@@ -4574,7 +4535,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.2.0.1',
+        version: '0.4.2.0.2',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
