@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.9</title>
+  <title>Golf Coach — v0.4.1.10</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -2944,7 +2944,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.9',
+        version: '0.4.1.10',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3101,7 +3101,7 @@
     // round-tripping through a download. Mirrors exportSessionRawJSON.
     function buildSessionJsonPayload() {
       return {
-        version: '0.4.1.9',
+        version: '0.4.1.10',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -4276,14 +4276,25 @@
       // technique. See brief v3.8 "Open design questions" -> "P7 detection"
       // for the data and the discussion that arrived here.
 
-      // The "should match at impact" landmark set. Hips/shoulders/trail
-      // arm intentionally excluded (they rotate). Knees match at controlled
-      // shadow-swing speed; hold for now and revisit if real range data
-      // shows otherwise.
+      // v0.4.1.10: body-only landmark set. Wrists and elbow REMOVED;
+      // shoulders ADDED. Reason: a May 1 indoor shadow-swing session
+      // showed MediaPipe wrist landmarks go to garbage during impact-blur
+      // frames — visibility scores stay high (0.85+) but the position
+      // values become physically impossible (wrist x jumping 30%+ of
+      // frame width per frame). The v0.4.1.9 set was matching against
+      // those garbage values, picking the first POST-blur frame where
+      // wrists "agreed with P1" — which by the geometry of the swing is
+      // ~2 frames after true impact. Re-scoring with this body-only set
+      // hits true impact within 1 frame on 4/4 indoor and shifts outdoor
+      // P7 ~2 frames earlier in the same direction. Pattern-matching is
+      // now done on slow-moving body landmarks only, which don't blur.
+      // Hips and trail arm still excluded (they rotate too far through
+      // the swing). Shoulders rotate too, but at impact they're back
+      // close to address-rotation; small residual rotation error is
+      // dwarfed by the precision gain from dropping the noisy wrists.
       const ADDRESS_MATCH_LMS = [
-        LM.LEFT_WRIST, LM.RIGHT_WRIST,
-        LM.LEFT_ELBOW,
         LM.NOSE,
+        LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER,
         LM.LEFT_KNEE, LM.RIGHT_KNEE
       ];
 
@@ -4661,7 +4672,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.9',
+        version: '0.4.1.10',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
