@@ -1,11 +1,12 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.10</title>
+  <title>Golf Coach — v0.4.1.11</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -22,872 +23,875 @@
       --finish: #ec87c0;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    html, body {
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-      background: var(--bg);
-      color: var(--fg);
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
-      -webkit-user-select: none;
-      user-select: none;
-      -webkit-tap-highlight-color: transparent;
-    }
-
-    #app {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-    }
-
-    #video-container {
-      position: relative;
-      flex: 1;
-      background: #000;
-      overflow: hidden;
-    }
-
-    #video {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      transform: scaleX(-1);
-    }
-
-    #overlay {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-    }
-
-    #rec-indicator {
-      position: absolute;
-      top: env(safe-area-inset-top, 16px);
-      left: 16px;
-      display: none;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      background: rgba(0, 0, 0, 0.5);
-      border-radius: 20px;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-    }
-
-    #rec-indicator.active { display: flex; }
-
-    #rec-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--rec);
-      animation: pulse 1s infinite;
-    }
-
-    /* v0.2: listening indicator, distinct from REC */
-    #listen-indicator {
-      position: absolute;
-      top: env(safe-area-inset-top, 16px);
-      right: 16px;
-      display: none;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      background: rgba(0, 0, 0, 0.5);
-      border-radius: 20px;
-      font-size: 13px;
-      font-weight: 500;
-      letter-spacing: 0.3px;
-      color: var(--fg);
-    }
-
-    #listen-indicator.active { display: flex; }
-
-    #listen-dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: var(--listen);
-      animation: pulse-slow 1.4s ease-in-out infinite;
-    }
-
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-    @keyframes pulse-slow { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
-
-    /* v0.2.1: transient "shape heard" pill bottom-center */
-    #shape-heard {
-      position: absolute;
-      bottom: calc(env(safe-area-inset-bottom, 16px) + 16px);
-      left: 50%;
-      transform: translateX(-50%) translateY(8px);
-      opacity: 0;
-      pointer-events: none;
-      padding: 8px 18px;
-      background: rgba(0, 0, 0, 0.65);
-      border: 1px solid rgba(155, 197, 61, 0.55);
-      border-radius: 22px;
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      color: var(--accent);
-      transition: opacity 0.2s, transform 0.2s;
-    }
-    #shape-heard.visible {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
-
-    #rec-border {
-      position: absolute;
-      inset: 0;
-      border: 4px solid transparent;
-      pointer-events: none;
-      transition: border-color 0.2s;
-    }
-
-    #rec-border.active { border-color: var(--rec); }
-    #rec-border.countdown { border-color: var(--accent); }
-
-    #countdown {
-      position: absolute;
-      inset: 0;
-      display: none;
-      justify-content: center;
-      align-items: center;
-      font-size: min(30vw, 240px);
-      font-weight: 700;
-      color: var(--accent);
-      text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
-      pointer-events: none;
-      font-variant-numeric: tabular-nums;
-    }
-
-    #countdown.active { display: flex; }
-
-    #countdown-label {
-      position: absolute;
-      bottom: 15%;
-      left: 0;
-      right: 0;
-      text-align: center;
-      font-size: 18px;
-      font-weight: 400;
-      color: var(--fg);
-      text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
-      letter-spacing: 1px;
-      display: none;
-    }
-
-    #controls {
-      padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
-      background: var(--bg);
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    #status {
-      text-align: center;
-      font-size: 14px;
-      color: var(--dim);
-      min-height: 20px;
-      letter-spacing: 0.3px;
-    }
-
-    #record-btn {
-      width: 100%;
-      padding: 20px;
-      font-size: 18px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      border: none;
-      border-radius: 12px;
-      background: var(--accent);
-      color: var(--bg);
-      cursor: pointer;
-      transition: background 0.15s, transform 0.1s;
-    }
-
-    #record-btn:active { transform: scale(0.98); }
-    #record-btn.recording { background: var(--rec); color: #fff; }
-    #record-btn.counting { background: var(--warn); color: var(--bg); }
-    #record-btn:disabled {
-      background: var(--dim);
-      color: rgba(0,0,0,0.4);
-      cursor: not-allowed;
-    }
-
-    /* v0.2: voice toggle row */
-    #voice-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 2px 4px;
-    }
-
-    #voice-row label {
-      font-size: 13px;
-      color: var(--dim);
-      letter-spacing: 0.3px;
-    }
-
-    #voice-toggle, #shape-toggle {
-      position: relative;
-      width: 44px;
-      height: 26px;
-      background: #3a3f3a;
-      border-radius: 13px;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: background 0.15s;
-    }
-
-    #voice-toggle.on, #shape-toggle.on { background: var(--accent); }
-
-    #voice-toggle::after, #shape-toggle::after {
-      content: '';
-      position: absolute;
-      top: 3px; left: 3px;
-      width: 20px; height: 20px;
-      background: #fff;
-      border-radius: 50%;
-      transition: transform 0.15s;
-    }
-
-    #voice-toggle.on::after, #shape-toggle.on::after { transform: translateX(18px); }
-
-    #voice-toggle.disabled, #shape-toggle.disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-
-    #result-panel {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: var(--bg);
-      padding: 24px 20px calc(env(safe-area-inset-bottom, 20px) + 20px);
-      flex-direction: column;
-      z-index: 10;
-      overflow-y: auto;
-    }
-
-    #result-panel.visible { display: flex; }
-
-    /* v0.3.2: MAIN block — big number, optional comment, optional shape.
-       Centered vertically in the remaining space above the action buttons.
-       Uses flex to float to the middle when there's room on a tall phone. */
-    #result-main {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      text-align: center;
-      gap: 12px;
-      padding: 20px 0;
-    }
-
-    /* Headline ratio number. Big, tabular-nums so 3:1 and 3.1:1 don't jitter. */
-    #result-value {
-      font-size: 72px;
-      font-weight: 700;
-      line-height: 1;
-      font-variant-numeric: tabular-nums;
-      color: var(--fg);
-      letter-spacing: -0.02em;
-    }
-    /* v0.4.1.2: multi-line headlines (e.g. head stability's two gate-rows)
-       need a smaller font and preserved whitespace for column alignment.
-       Set when the value text contains a newline. Monospace-like alignment
-       via tabular-nums + a fixed-pitch font keeps the columns lined up. */
-    #result-value.multi-line {
-      font-size: clamp(20px, 5vw, 28px);
-      font-weight: 600;
-      line-height: 1.35;
-      letter-spacing: 0.4px;
-      white-space: pre;
-      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-      text-align: left;
-    }
-    #result-value.good  { color: var(--accent); }
-    #result-value.off,
-    #result-value.below,
-    #result-value.above { color: var(--warn); }
-    #result-value.error { color: var(--error); }
-
-    /* Plain-language comment line. Empty (zero height) when nothing to add.
-       v0.3.2 patch: sized for readability from ~1.5m away (user at address
-       position, phone on tripod 2–2.5m away — edge case but within reach). */
-    #result-comment {
-      font-size: clamp(24px, 5vw, 36px);
-      font-weight: 500;
-      color: var(--fg);
-      min-height: 0;
-      letter-spacing: 0.2px;
-      line-height: 1.25;
-    }
-    #result-comment.good  { color: var(--accent); }
-    #result-comment.off,
-    #result-comment.below,
-    #result-comment.above { color: var(--warn); }
-    #result-comment.error { color: var(--error); }
-    #result-comment:empty { display: none; }
-
-    /* Shape line. Present only when a shape was called. Same size as the
-       comment line — at 1m+ the previous smaller size was hard to read, and
-       the shape is legitimately useful info (a mishear is the whole reason
-       we echo it, and the golfer wants to verify visually when they can). */
-    #result-shape {
-      font-size: clamp(24px, 5vw, 36px);
-      color: var(--dim);
-      letter-spacing: 0.3px;
-      margin-top: 4px;
-      line-height: 1.25;
-    }
-    #result-shape:empty { display: none; }
-
-    /* v0.3.2: ACTIONS — stacked. Next Swing primary, End session secondary. */
-    #result-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      margin-top: 16px;
-    }
-
-    #result-close, #result-end {
-      padding: 14px;
-      font-size: 15px;
-      font-weight: 600;
-      border-radius: 10px;
-      letter-spacing: 0.5px;
-      cursor: pointer;
-    }
-
-    #result-close {
-      background: var(--accent);
-      border: 1px solid var(--accent);
-      color: var(--bg);
-    }
-
-    #result-end {
-      background: transparent;
-      border: 1px solid rgba(217, 95, 67, 0.7);
-      color: var(--error);
-    }
-
-    #result-close:active, #result-end:active { opacity: 0.75; }
-
-    /* v0.3.2: DEV LINKS — small underlined text, centered, quiet. */
-    #result-dev-links {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      gap: 8px;
-      margin-top: 14px;
-      font-size: 12px;
-      color: var(--dim);
-    }
-    #result-dev-links a {
-      color: var(--dim);
-      text-decoration: underline;
-      cursor: pointer;
-    }
-    #result-dev-links a:active { opacity: 0.6; }
-    #result-dev-links .dev-link-sep { opacity: 0.6; }
-
-    /* v0.3.2: DEBUG block — hidden by default. */
-    #result-debug {
-      margin-top: 16px;
-      padding-top: 16px;
-      border-top: 1px dashed rgba(138, 135, 120, 0.25);
-    }
-    #result-debug.hidden { display: none; }
-
-    /* Internal verdict string shown inside the debug view so devs can still
-       see the raw v0.2.x-era string (e.g. "Backswing too fast") before it
-       was routed through the v0.3.2 comment map. */
-    #result-verdict-debug {
-      font-size: 12px;
-      color: var(--dim);
-      font-family: 'SF Mono', monospace;
-      margin-bottom: 10px;
-    }
-
-    #warnings {
-      margin: 12px 0;
-      padding: 10px 14px;
-      background: rgba(229, 168, 35, 0.12);
-      border-left: 3px solid var(--warn);
-      border-radius: 4px;
-      font-size: 12px;
-      color: var(--fg);
-      display: none;
-    }
-
-    #warnings.visible { display: block; }
-
-    #chart-section { margin: 16px 0; }
-
-    #chart-title {
-      font-size: 11px;
-      color: var(--dim);
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-
-    #chart-canvas {
-      width: 100%;
-      height: 180px;
-      background: #1a2420;
-      border-radius: 8px;
-      display: block;
-    }
-
-    #chart-legend {
-      display: flex;
-      justify-content: center;
-      gap: 14px;
-      margin-top: 8px;
-      font-size: 11px;
-      color: var(--dim);
-      flex-wrap: wrap;
-    }
-
-    .legend-item { display: flex; align-items: center; gap: 4px; }
-    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
-
-    #diagnostics {
-      background: #1a2420;
-      border-radius: 8px;
-      padding: 12px 16px;
-      margin-bottom: 16px;
-      font-variant-numeric: tabular-nums;
-      font-size: 13px;
-    }
-
-    .diag-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 4px 0;
-      color: var(--fg);
-    }
-
-    .diag-row + .diag-row { border-top: 1px solid rgba(232, 228, 216, 0.08); }
-    .diag-label { color: var(--dim); }
-
-    /* v0.2.4 */
-    #last-heard-row {
-      display: flex;
-      align-items: baseline;
-      gap: 10px;
-      padding: 10px 14px;
-      background: #1a2420;
-      border-radius: 8px;
-      margin-bottom: 10px;
-      font-variant-numeric: tabular-nums;
-    }
-    #last-heard-row .lh-label {
-      font-size: 11px;
-      color: var(--dim);
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-    }
-    #last-heard-row .lh-value {
-      font-size: 20px;
-      font-weight: 600;
-      color: var(--accent);
-      letter-spacing: 0.5px;
-    }
-    #last-heard-row .lh-value.empty { color: var(--dim); font-weight: 400; font-size: 16px; }
-
-    #transcript-debug {
-      padding: 10px 14px;
-      background: #1a2420;
-      border-radius: 8px;
-      margin-bottom: 16px;
-      font-family: 'SF Mono', ui-monospace, monospace;
-      font-size: 11px;
-      color: var(--fg);
-      max-height: 100px;
-      overflow-y: auto;
-    }
-    #transcript-debug .td-label {
-      font-size: 10px;
-      color: var(--dim);
-      letter-spacing: 1.5px;
-      text-transform: uppercase;
-      margin-bottom: 6px;
-    }
-    #transcript-debug .td-list .td-entry {
-      padding: 2px 0;
-      color: rgba(232, 228, 216, 0.75);
-      line-height: 1.35;
-    }
-    #transcript-debug .td-list .td-entry.matched { color: var(--accent); }
-    #transcript-debug .td-list .td-entry .td-tag {
-      display: inline-block;
-      min-width: 44px;
-      color: var(--dim);
-      margin-right: 6px;
-    }
-
-    /* v0.3.1 CSS for #result-actions removed — v0.3.2 replacement is
-       defined above with the main panel styles. Save raw data is now a
-       text link (not a button), and End session stacks directly below
-       Next Swing (no secondary side-by-side row anymore). */
-
-    #loading {
-      position: fixed;
-      inset: 0;
-      background: var(--bg);
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      gap: 16px;
-      z-index: 20;
-    }
-
-    #loading.hidden { display: none; }
-
-    #loading-label {
-      font-size: 14px;
-      color: var(--dim);
-      letter-spacing: 1px;
-    }
-
-    #loading-spinner {
-      width: 32px;
-      height: 32px;
-      border: 3px solid var(--dim);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    #error-panel {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: var(--bg);
-      padding: 32px 24px;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      z-index: 30;
-    }
-
-    #error-panel.visible { display: flex; }
-
-    #error-title {
-      font-size: 20px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      color: var(--error);
-    }
-
-    #error-message {
-      font-size: 14px;
-      text-align: center;
-      line-height: 1.5;
-      color: var(--fg);
-      max-width: 320px;
-    }
-
-    #debug {
-      position: absolute;
-      bottom: 8px;
-      left: 8px;
-      right: 8px;
-      font-size: 10px;
-      color: rgba(255,255,255,0.5);
-      font-family: 'SF Mono', monospace;
-      pointer-events: none;
-    }
-
-    /* ============================================================ */
-    /* v0.3.1: start-screen / session mode split                    */
-    /* ============================================================ */
-
-    /* Two top-level modes, controlled by a class on #app.           */
-    /* Default HTML has both sub-trees present; CSS hides whichever  */
-    /* mode isn't active. JS flips the class on #app.                */
-
-    #app.mode-start   #controls      { display: none; }
-    #app.mode-start   #start-screen  { display: flex; }
-    #app.mode-start   #review-screen { display: none; }
-    #app.mode-session #controls      { display: flex; }
-    #app.mode-session #start-screen  { display: none; }
-    #app.mode-session #review-screen { display: none; }
-    #app.mode-review  #controls      { display: none; }
-    #app.mode-review  #start-screen  { display: none; }
-    #app.mode-review  #review-screen { display: flex; }
-
-    /* v0.3.1 patch: End session moved to result panel — no mode-class CSS
-       needed for it anymore. v0.3.3: End session button still lives on the
-       result panel; its click now routes to review mode instead of confirm. */
-
-    #app.mode-review  #video-container { display: none; }
-
-    /* ----------------- Start screen layout ---------------------- */
-    #start-screen {
-      padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
-      background: var(--bg);
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    .start-section-label {
-      font-size: 12px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: var(--dim);
-      margin-bottom: 2px;
-    }
-
-    /* Drill tile (selected state is the default; only one drill today) */
-    /* v0.4.1: drill picker layout — vertical stack of tiles. */
-    #drill-picker {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .drill-tile {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 16px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(138, 135, 120, 0.35);
-      border-radius: 12px;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
-    }
-    .drill-tile.selected {
-      background: rgba(155, 197, 61, 0.08);
-      border-color: var(--accent);
-      border-width: 2px;
-      /* compensate for the 2px border so layout doesn't shift on selection */
-      padding: 13px 15px;
-    }
-    .drill-tile:active { background: rgba(155, 197, 61, 0.18); }
-
-    .drill-tile-bullet {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      background: transparent;
-      border: 2px solid rgba(138, 135, 120, 0.5);
-      flex-shrink: 0;
-      transition: background 0.15s, border-color 0.15s;
-    }
-    .drill-tile.selected .drill-tile-bullet {
-      background: var(--accent);
-      border-color: var(--accent);
-    }
-
-    .drill-tile-text {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .drill-tile-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--fg);
-    }
-
-    .drill-tile-desc {
-      font-size: 12px;
-      color: var(--dim);
-    }
-
-    /* v0.4.1: drill-tile-placeholder CSS removed — was the "more drills
-       coming soon" pill; now we have real drill tiles. */
-
-    /* Start-screen toggle rows — same visual as in-session but packed tighter */
-    .start-toggle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 4px;
-    }
-    .start-toggle-row label {
-      font-size: 14px;
-      color: var(--fg);
-    }
-
-    /* Start CTA */
-    #start-session-btn {
-      margin-top: 4px;
-      padding: 14px 24px;
-      background: var(--accent);
-      color: #0f1712;
-      border: none;
-      border-radius: 12px;
-      font-size: 17px;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-      cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-    }
-    #start-session-btn:active { opacity: 0.8; }
-
-    /* ============================================================ */
-    /* v0.3.3: Session review screen                                */
-    /* ============================================================ */
-    #review-screen {
-      flex: 1;
-      flex-direction: column;
-      padding: 20px 20px calc(env(safe-area-inset-bottom, 20px) + 20px);
-      background: var(--bg);
-      overflow-y: auto;
-      gap: 20px;
-    }
-
-    .review-header {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      padding-bottom: 14px;
-      border-bottom: 1px solid rgba(138, 135, 120, 0.25);
-    }
-
-    .review-title {
-      font-size: 18px;
-      font-weight: 600;
-      color: var(--fg);
-      letter-spacing: 0.3px;
-    }
-
-    .review-summary {
-      font-size: 14px;
-      color: var(--dim);
-    }
-
-    .review-section {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .review-section-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--dim);
-      letter-spacing: 1px;
-      text-transform: uppercase;
-    }
-
-    .review-empty {
-      font-size: 14px;
-      color: var(--dim);
-      font-style: italic;
-      padding: 10px 0;
-    }
-
-    /* Canvas wrappers — responsive box that the canvas fills. */
-    .review-chart-box {
-      background: rgba(255, 255, 255, 0.03);
-      border-radius: 10px;
-      padding: 12px;
-    }
-
-    #review-dist-canvas, #review-avg-canvas {
-      width: 100%;
-      height: 200px;
-      display: block;
-    }
-
-    /* Per-swing table */
-    .review-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-
-    .review-table th {
-      text-align: left;
-      padding: 8px 6px;
-      font-weight: 600;
-      color: var(--dim);
-      border-bottom: 1px solid rgba(138, 135, 120, 0.3);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .review-table td {
-      padding: 8px 6px;
-      color: var(--fg);
-      border-bottom: 1px solid rgba(138, 135, 120, 0.12);
-      font-variant-numeric: tabular-nums;
-    }
-
-    .review-table tr.good td:first-child  { border-left: 3px solid var(--accent); padding-left: 8px; }
-    .review-table tr.off td:first-child,
-    .review-table tr.below td:first-child,
-    .review-table tr.above td:first-child { border-left: 3px solid var(--warn); padding-left: 8px; }
-    .review-table tr.error td:first-child { border-left: 3px solid var(--error); padding-left: 8px; }
-
-    .review-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      margin-top: 10px;
-    }
-
-    #review-export-btn, #review-export-raw-btn, #review-export-videos-btn, #review-discard-btn {
-      padding: 14px;
-      font-size: 15px;
-      font-weight: 600;
-      border-radius: 10px;
-      letter-spacing: 0.5px;
-      cursor: pointer;
-    }
-
-    #review-export-btn, #review-export-raw-btn, #review-export-videos-btn {
-      background: transparent;
-      border: 1px solid var(--fg);
-      color: var(--fg);
-    }
-
-    #review-discard-btn {
-      background: transparent;
-      border: 1px solid rgba(217, 95, 67, 0.7);
-      color: var(--error);
-    }
-
-    #review-export-btn:active, #review-export-raw-btn:active, #review-export-videos-btn:active, #review-discard-btn:active { opacity: 0.75; }
-
-    /* ----------------- End-session button (in-session) ---------- */
-    /* v0.3.1 patch: End session was briefly a floating top-right button,
-       but field testing showed it was easier to put it on the result panel
-       (user is looking at the screen between swings anyway). Floating button
-       removed; see #result-panel DOM for the new placement. This CSS block
-       intentionally left blank as a marker. */
-
-    /* End-session button takes the top-right slot that listen-indicator
-       uses during session. Stack vertically if both are visible. */
-    /* v0.3.1 patch: no longer needed now that end-session moved to result panel */
-
-    /* v0.3.3: confirm-dialog CSS removed — the dialog was replaced by the
-       review screen, which is its own DOM block. */
+```
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#video-container {
+  position: relative;
+  flex: 1;
+  background: #000;
+  overflow: hidden;
+}
+
+#video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#rec-indicator {
+  position: absolute;
+  top: env(safe-area-inset-top, 16px);
+  left: 16px;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+#rec-indicator.active { display: flex; }
+
+#rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--rec);
+  animation: pulse 1s infinite;
+}
+
+/* v0.2: listening indicator, distinct from REC */
+#listen-indicator {
+  position: absolute;
+  top: env(safe-area-inset-top, 16px);
+  right: 16px;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  color: var(--fg);
+}
+
+#listen-indicator.active { display: flex; }
+
+#listen-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--listen);
+  animation: pulse-slow 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes pulse-slow { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
+
+/* v0.2.1: transient "shape heard" pill bottom-center */
+#shape-heard {
+  position: absolute;
+  bottom: calc(env(safe-area-inset-bottom, 16px) + 16px);
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  opacity: 0;
+  pointer-events: none;
+  padding: 8px 18px;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(155, 197, 61, 0.55);
+  border-radius: 22px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  transition: opacity 0.2s, transform 0.2s;
+}
+#shape-heard.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+#rec-border {
+  position: absolute;
+  inset: 0;
+  border: 4px solid transparent;
+  pointer-events: none;
+  transition: border-color 0.2s;
+}
+
+#rec-border.active { border-color: var(--rec); }
+#rec-border.countdown { border-color: var(--accent); }
+
+#countdown {
+  position: absolute;
+  inset: 0;
+  display: none;
+  justify-content: center;
+  align-items: center;
+  font-size: min(30vw, 240px);
+  font-weight: 700;
+  color: var(--accent);
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+#countdown.active { display: flex; }
+
+#countdown-label {
+  position: absolute;
+  bottom: 15%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--fg);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+  letter-spacing: 1px;
+  display: none;
+}
+
+#controls {
+  padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#status {
+  text-align: center;
+  font-size: 14px;
+  color: var(--dim);
+  min-height: 20px;
+  letter-spacing: 0.3px;
+}
+
+#record-btn {
+  width: 100%;
+  padding: 20px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+#record-btn:active { transform: scale(0.98); }
+#record-btn.recording { background: var(--rec); color: #fff; }
+#record-btn.counting { background: var(--warn); color: var(--bg); }
+#record-btn:disabled {
+  background: var(--dim);
+  color: rgba(0,0,0,0.4);
+  cursor: not-allowed;
+}
+
+/* v0.2: voice toggle row */
+#voice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px;
+}
+
+#voice-row label {
+  font-size: 13px;
+  color: var(--dim);
+  letter-spacing: 0.3px;
+}
+
+#voice-toggle, #shape-toggle {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  background: #3a3f3a;
+  border-radius: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+#voice-toggle.on, #shape-toggle.on { background: var(--accent); }
+
+#voice-toggle::after, #shape-toggle::after {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 20px; height: 20px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+
+#voice-toggle.on::after, #shape-toggle.on::after { transform: translateX(18px); }
+
+#voice-toggle.disabled, #shape-toggle.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#result-panel {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  padding: 24px 20px calc(env(safe-area-inset-bottom, 20px) + 20px);
+  flex-direction: column;
+  z-index: 10;
+  overflow-y: auto;
+}
+
+#result-panel.visible { display: flex; }
+
+/* v0.3.2: MAIN block — big number, optional comment, optional shape.
+   Centered vertically in the remaining space above the action buttons.
+   Uses flex to float to the middle when there's room on a tall phone. */
+#result-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 20px 0;
+}
+
+/* Headline ratio number. Big, tabular-nums so 3:1 and 3.1:1 don't jitter. */
+#result-value {
+  font-size: 72px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  letter-spacing: -0.02em;
+}
+/* v0.4.1.2: multi-line headlines (e.g. head stability's two gate-rows)
+   need a smaller font and preserved whitespace for column alignment.
+   Set when the value text contains a newline. Monospace-like alignment
+   via tabular-nums + a fixed-pitch font keeps the columns lined up. */
+#result-value.multi-line {
+  font-size: clamp(20px, 5vw, 28px);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.4px;
+  white-space: pre;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  text-align: left;
+}
+#result-value.good  { color: var(--accent); }
+#result-value.off,
+#result-value.below,
+#result-value.above { color: var(--warn); }
+#result-value.error { color: var(--error); }
+
+/* Plain-language comment line. Empty (zero height) when nothing to add.
+   v0.3.2 patch: sized for readability from ~1.5m away (user at address
+   position, phone on tripod 2–2.5m away — edge case but within reach). */
+#result-comment {
+  font-size: clamp(24px, 5vw, 36px);
+  font-weight: 500;
+  color: var(--fg);
+  min-height: 0;
+  letter-spacing: 0.2px;
+  line-height: 1.25;
+}
+#result-comment.good  { color: var(--accent); }
+#result-comment.off,
+#result-comment.below,
+#result-comment.above { color: var(--warn); }
+#result-comment.error { color: var(--error); }
+#result-comment:empty { display: none; }
+
+/* Shape line. Present only when a shape was called. Same size as the
+   comment line — at 1m+ the previous smaller size was hard to read, and
+   the shape is legitimately useful info (a mishear is the whole reason
+   we echo it, and the golfer wants to verify visually when they can). */
+#result-shape {
+  font-size: clamp(24px, 5vw, 36px);
+  color: var(--dim);
+  letter-spacing: 0.3px;
+  margin-top: 4px;
+  line-height: 1.25;
+}
+#result-shape:empty { display: none; }
+
+/* v0.3.2: ACTIONS — stacked. Next Swing primary, End session secondary. */
+#result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+#result-close, #result-end {
+  padding: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 10px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+
+#result-close {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--bg);
+}
+
+#result-end {
+  background: transparent;
+  border: 1px solid rgba(217, 95, 67, 0.7);
+  color: var(--error);
+}
+
+#result-close:active, #result-end:active { opacity: 0.75; }
+
+/* v0.3.2: DEV LINKS — small underlined text, centered, quiet. */
+#result-dev-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--dim);
+}
+#result-dev-links a {
+  color: var(--dim);
+  text-decoration: underline;
+  cursor: pointer;
+}
+#result-dev-links a:active { opacity: 0.6; }
+#result-dev-links .dev-link-sep { opacity: 0.6; }
+
+/* v0.3.2: DEBUG block — hidden by default. */
+#result-debug {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed rgba(138, 135, 120, 0.25);
+}
+#result-debug.hidden { display: none; }
+
+/* Internal verdict string shown inside the debug view so devs can still
+   see the raw v0.2.x-era string (e.g. "Backswing too fast") before it
+   was routed through the v0.3.2 comment map. */
+#result-verdict-debug {
+  font-size: 12px;
+  color: var(--dim);
+  font-family: 'SF Mono', monospace;
+  margin-bottom: 10px;
+}
+
+#warnings {
+  margin: 12px 0;
+  padding: 10px 14px;
+  background: rgba(229, 168, 35, 0.12);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--fg);
+  display: none;
+}
+
+#warnings.visible { display: block; }
+
+#chart-section { margin: 16px 0; }
+
+#chart-title {
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+#chart-canvas {
+  width: 100%;
+  height: 180px;
+  background: #1a2420;
+  border-radius: 8px;
+  display: block;
+}
+
+#chart-legend {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--dim);
+  flex-wrap: wrap;
+}
+
+.legend-item { display: flex; align-items: center; gap: 4px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+#diagnostics {
+  background: #1a2420;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.diag-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  color: var(--fg);
+}
+
+.diag-row + .diag-row { border-top: 1px solid rgba(232, 228, 216, 0.08); }
+.diag-label { color: var(--dim); }
+
+/* v0.2.4 */
+#last-heard-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #1a2420;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+}
+#last-heard-row .lh-label {
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+#last-heard-row .lh-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+#last-heard-row .lh-value.empty { color: var(--dim); font-weight: 400; font-size: 16px; }
+
+#transcript-debug {
+  padding: 10px 14px;
+  background: #1a2420;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg);
+  max-height: 100px;
+  overflow-y: auto;
+}
+#transcript-debug .td-label {
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+#transcript-debug .td-list .td-entry {
+  padding: 2px 0;
+  color: rgba(232, 228, 216, 0.75);
+  line-height: 1.35;
+}
+#transcript-debug .td-list .td-entry.matched { color: var(--accent); }
+#transcript-debug .td-list .td-entry .td-tag {
+  display: inline-block;
+  min-width: 44px;
+  color: var(--dim);
+  margin-right: 6px;
+}
+
+/* v0.3.1 CSS for #result-actions removed — v0.3.2 replacement is
+   defined above with the main panel styles. Save raw data is now a
+   text link (not a button), and End session stacks directly below
+   Next Swing (no secondary side-by-side row anymore). */
+
+#loading {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  z-index: 20;
+}
+
+#loading.hidden { display: none; }
+
+#loading-label {
+  font-size: 14px;
+  color: var(--dim);
+  letter-spacing: 1px;
+}
+
+#loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--dim);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#error-panel {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  padding: 32px 24px;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 30;
+}
+
+#error-panel.visible { display: flex; }
+
+#error-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--error);
+}
+
+#error-message {
+  font-size: 14px;
+  text-align: center;
+  line-height: 1.5;
+  color: var(--fg);
+  max-width: 320px;
+}
+
+#debug {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  font-size: 10px;
+  color: rgba(255,255,255,0.5);
+  font-family: 'SF Mono', monospace;
+  pointer-events: none;
+}
+
+/* ============================================================ */
+/* v0.3.1: start-screen / session mode split                    */
+/* ============================================================ */
+
+/* Two top-level modes, controlled by a class on #app.           */
+/* Default HTML has both sub-trees present; CSS hides whichever  */
+/* mode isn't active. JS flips the class on #app.                */
+
+#app.mode-start   #controls      { display: none; }
+#app.mode-start   #start-screen  { display: flex; }
+#app.mode-start   #review-screen { display: none; }
+#app.mode-session #controls      { display: flex; }
+#app.mode-session #start-screen  { display: none; }
+#app.mode-session #review-screen { display: none; }
+#app.mode-review  #controls      { display: none; }
+#app.mode-review  #start-screen  { display: none; }
+#app.mode-review  #review-screen { display: flex; }
+
+/* v0.3.1 patch: End session moved to result panel — no mode-class CSS
+   needed for it anymore. v0.3.3: End session button still lives on the
+   result panel; its click now routes to review mode instead of confirm. */
+
+#app.mode-review  #video-container { display: none; }
+
+/* ----------------- Start screen layout ---------------------- */
+#start-screen {
+  padding: 16px 20px calc(env(safe-area-inset-bottom, 16px) + 16px);
+  background: var(--bg);
+  flex-direction: column;
+  gap: 14px;
+}
+
+.start-section-label {
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 2px;
+}
+
+/* Drill tile (selected state is the default; only one drill today) */
+/* v0.4.1: drill picker layout — vertical stack of tiles. */
+#drill-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drill-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(138, 135, 120, 0.35);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.drill-tile.selected {
+  background: rgba(155, 197, 61, 0.08);
+  border-color: var(--accent);
+  border-width: 2px;
+  /* compensate for the 2px border so layout doesn't shift on selection */
+  padding: 13px 15px;
+}
+.drill-tile:active { background: rgba(155, 197, 61, 0.18); }
+
+.drill-tile-bullet {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid rgba(138, 135, 120, 0.5);
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.drill-tile.selected .drill-tile-bullet {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.drill-tile-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drill-tile-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.drill-tile-desc {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* v0.4.1: drill-tile-placeholder CSS removed — was the "more drills
+   coming soon" pill; now we have real drill tiles. */
+
+/* Start-screen toggle rows — same visual as in-session but packed tighter */
+.start-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 4px;
+}
+.start-toggle-row label {
+  font-size: 14px;
+  color: var(--fg);
+}
+
+/* Start CTA */
+#start-session-btn {
+  margin-top: 4px;
+  padding: 14px 24px;
+  background: var(--accent);
+  color: #0f1712;
+  border: none;
+  border-radius: 12px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#start-session-btn:active { opacity: 0.8; }
+
+/* ============================================================ */
+/* v0.3.3: Session review screen                                */
+/* ============================================================ */
+#review-screen {
+  flex: 1;
+  flex-direction: column;
+  padding: 20px 20px calc(env(safe-area-inset-bottom, 20px) + 20px);
+  background: var(--bg);
+  overflow-y: auto;
+  gap: 20px;
+}
+
+.review-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(138, 135, 120, 0.25);
+}
+
+.review-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.3px;
+}
+
+.review-summary {
+  font-size: 14px;
+  color: var(--dim);
+}
+
+.review-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.review-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.review-empty {
+  font-size: 14px;
+  color: var(--dim);
+  font-style: italic;
+  padding: 10px 0;
+}
+
+/* Canvas wrappers — responsive box that the canvas fills. */
+.review-chart-box {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+#review-dist-canvas, #review-avg-canvas {
+  width: 100%;
+  height: 200px;
+  display: block;
+}
+
+/* Per-swing table */
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.review-table th {
+  text-align: left;
+  padding: 8px 6px;
+  font-weight: 600;
+  color: var(--dim);
+  border-bottom: 1px solid rgba(138, 135, 120, 0.3);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.review-table td {
+  padding: 8px 6px;
+  color: var(--fg);
+  border-bottom: 1px solid rgba(138, 135, 120, 0.12);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-table tr.good td:first-child  { border-left: 3px solid var(--accent); padding-left: 8px; }
+.review-table tr.off td:first-child,
+.review-table tr.below td:first-child,
+.review-table tr.above td:first-child { border-left: 3px solid var(--warn); padding-left: 8px; }
+.review-table tr.error td:first-child { border-left: 3px solid var(--error); padding-left: 8px; }
+
+.review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+#review-export-btn, #review-export-raw-btn, #review-export-videos-btn, #review-discard-btn {
+  padding: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 10px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+
+#review-export-btn, #review-export-raw-btn, #review-export-videos-btn {
+  background: transparent;
+  border: 1px solid var(--fg);
+  color: var(--fg);
+}
+
+#review-discard-btn {
+  background: transparent;
+  border: 1px solid rgba(217, 95, 67, 0.7);
+  color: var(--error);
+}
+
+#review-export-btn:active, #review-export-raw-btn:active, #review-export-videos-btn:active, #review-discard-btn:active { opacity: 0.75; }
+
+/* ----------------- End-session button (in-session) ---------- */
+/* v0.3.1 patch: End session was briefly a floating top-right button,
+   but field testing showed it was easier to put it on the result panel
+   (user is looking at the screen between swings anyway). Floating button
+   removed; see #result-panel DOM for the new placement. This CSS block
+   intentionally left blank as a marker. */
+
+/* End-session button takes the top-right slot that listen-indicator
+   uses during session. Stack vertically if both are visible. */
+/* v0.3.1 patch: no longer needed now that end-session moved to result panel */
+
+/* v0.3.3: confirm-dialog CSS removed — the dialog was replaced by the
+   review screen, which is its own DOM block. */
+```
+
   </style>
 </head>
 <body>
@@ -910,110 +914,113 @@
       <div id="debug"></div>
     </div>
 
-    <!-- v0.3.1: End session moved to the result panel (inline with Next Swing).
-         Provisional for v0.3.1 — will move again in v0.3.2 when the panel
-         itself is simplified. -->
+```
+<!-- v0.3.1: End session moved to the result panel (inline with Next Swing).
+     Provisional for v0.3.1 — will move again in v0.3.2 when the panel
+     itself is simplified. -->
 
-    <!-- v0.3.1: start screen — landing page, drill picker, toggles -->
-    <div id="start-screen">
-      <div class="start-section-label">Today's practice</div>
-      <!-- v0.4.1: real drill picker. Tiles are selectable; the picker
-           reads sessionConfig.drill from the data-drill-id attribute of
-           the tile that has class="selected" when Start session fires. -->
-      <div id="drill-picker">
-        <div class="drill-tile selected" data-drill-id="tempo" role="button" tabindex="0" aria-selected="true">
-          <div class="drill-tile-bullet"></div>
-          <div class="drill-tile-text">
-            <div class="drill-tile-title">Tempo</div>
-            <div class="drill-tile-desc">Backswing-to-downswing ratio (target ~3:1)</div>
-          </div>
-        </div>
-        <div class="drill-tile" data-drill-id="head_stability" role="button" tabindex="0" aria-selected="false">
-          <div class="drill-tile-bullet"></div>
-          <div class="drill-tile-text">
-            <div class="drill-tile-title">Head stability</div>
-            <div class="drill-tile-desc">How still your head stays during the swing</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="start-section-label" style="margin-top: 6px;">Session settings</div>
-      <div class="start-toggle-row">
-        <label for="voice-toggle">Voice trigger (say &ldquo;ready&rdquo;)</label>
-        <div id="voice-toggle" class="on" role="switch" aria-checked="true" tabindex="0"></div>
-      </div>
-      <div class="start-toggle-row">
-        <label for="shape-toggle">Shape reporting (say &ldquo;pull&rdquo;, &ldquo;straight&rdquo;, &hellip;)</label>
-        <div id="shape-toggle" role="switch" aria-checked="false" tabindex="0"></div>
-      </div>
-
-      <button id="start-session-btn" disabled>Start session</button>
-    </div>
-
-    <div id="controls">
-      <div id="status">Say &ldquo;ready&rdquo; when you&rsquo;re at address.</div>
-      <button id="record-btn" disabled>Next Swing</button>
-    </div>
-
-    <!-- v0.3.3: session review screen (mode-review). Replaces the v0.3.1/v0.3.2
-         confirm-dialog flow entirely. End session from the result panel now
-         routes straight here; user reviews their session, optionally exports
-         to CSV, then taps Discard and end to return to start. -->
-    <div id="review-screen">
-      <div class="review-header">
-        <div class="review-title">Session review</div>
-        <div class="review-summary" id="review-summary">—</div>
-      </div>
-
-      <div class="review-section" id="review-dist-section">
-        <div class="review-section-title">Tempo distribution</div>
-        <div class="review-chart-box">
-          <canvas id="review-dist-canvas"></canvas>
-        </div>
-      </div>
-
-      <div class="review-section" id="review-avg-section">
-        <div class="review-section-title">Average swing shape</div>
-        <div class="review-chart-box">
-          <canvas id="review-avg-canvas"></canvas>
-        </div>
-        <div class="review-empty" id="review-avg-empty" style="display:none;">
-          Need at least 3 complete swings for the average shape.
-        </div>
-      </div>
-
-      <div class="review-section" id="review-table-section">
-        <div class="review-section-title">Swings</div>
-        <table class="review-table" id="review-table">
-          <!-- v0.4.0: thead built dynamically by renderSwingTable from
-               universal columns + drill.tableColumns -->
-          <thead id="review-table-head"></thead>
-          <tbody id="review-table-body"></tbody>
-        </table>
-      </div>
-
-      <div class="review-empty" id="review-empty-state" style="display:none;">
-        No swings yet — session ended before any swing was recorded.
-      </div>
-
-      <div class="review-actions">
-        <!-- v0.4.1.8: button rework. Two download paths exposed:
-             1. "Download bundle (videos+JSON)" — ZIP with all videos
-                + session JSON. Primary action for handing off a
-                session for offline analysis.
-             2. "Download JSON" — JSON only, no size limit concern.
-                Useful when MediaRecorder is unsupported, or for
-                quick metric-only inspections, or when sessions
-                exceed the user's transport size limit (e.g. email
-                attachments) and they only need the numbers.
-             CSV download stays for backwards compat / spreadsheet
-             use. -->
-        <button id="review-export-videos-btn" style="display:none;">Download bundle (videos+JSON)</button>
-        <button id="review-export-raw-btn">Download JSON</button>
-        <button id="review-export-btn">Download session CSV</button>
-        <button id="review-discard-btn">Discard and end</button>
+<!-- v0.3.1: start screen — landing page, drill picker, toggles -->
+<div id="start-screen">
+  <div class="start-section-label">Today's practice</div>
+  <!-- v0.4.1: real drill picker. Tiles are selectable; the picker
+       reads sessionConfig.drill from the data-drill-id attribute of
+       the tile that has class="selected" when Start session fires. -->
+  <div id="drill-picker">
+    <div class="drill-tile selected" data-drill-id="tempo" role="button" tabindex="0" aria-selected="true">
+      <div class="drill-tile-bullet"></div>
+      <div class="drill-tile-text">
+        <div class="drill-tile-title">Tempo</div>
+        <div class="drill-tile-desc">Backswing-to-downswing ratio (target ~3:1)</div>
       </div>
     </div>
+    <div class="drill-tile" data-drill-id="head_stability" role="button" tabindex="0" aria-selected="false">
+      <div class="drill-tile-bullet"></div>
+      <div class="drill-tile-text">
+        <div class="drill-tile-title">Head stability</div>
+        <div class="drill-tile-desc">How still your head stays during the swing</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="start-section-label" style="margin-top: 6px;">Session settings</div>
+  <div class="start-toggle-row">
+    <label for="voice-toggle">Voice trigger (say &ldquo;ready&rdquo;)</label>
+    <div id="voice-toggle" class="on" role="switch" aria-checked="true" tabindex="0"></div>
+  </div>
+  <div class="start-toggle-row">
+    <label for="shape-toggle">Shape reporting (say &ldquo;pull&rdquo;, &ldquo;straight&rdquo;, &hellip;)</label>
+    <div id="shape-toggle" role="switch" aria-checked="false" tabindex="0"></div>
+  </div>
+
+  <button id="start-session-btn" disabled>Start session</button>
+</div>
+
+<div id="controls">
+  <div id="status">Say &ldquo;ready&rdquo; when you&rsquo;re at address.</div>
+  <button id="record-btn" disabled>Next Swing</button>
+</div>
+
+<!-- v0.3.3: session review screen (mode-review). Replaces the v0.3.1/v0.3.2
+     confirm-dialog flow entirely. End session from the result panel now
+     routes straight here; user reviews their session, optionally exports
+     to CSV, then taps Discard and end to return to start. -->
+<div id="review-screen">
+  <div class="review-header">
+    <div class="review-title">Session review</div>
+    <div class="review-summary" id="review-summary">—</div>
+  </div>
+
+  <div class="review-section" id="review-dist-section">
+    <div class="review-section-title">Tempo distribution</div>
+    <div class="review-chart-box">
+      <canvas id="review-dist-canvas"></canvas>
+    </div>
+  </div>
+
+  <div class="review-section" id="review-avg-section">
+    <div class="review-section-title">Average swing shape</div>
+    <div class="review-chart-box">
+      <canvas id="review-avg-canvas"></canvas>
+    </div>
+    <div class="review-empty" id="review-avg-empty" style="display:none;">
+      Need at least 3 complete swings for the average shape.
+    </div>
+  </div>
+
+  <div class="review-section" id="review-table-section">
+    <div class="review-section-title">Swings</div>
+    <table class="review-table" id="review-table">
+      <!-- v0.4.0: thead built dynamically by renderSwingTable from
+           universal columns + drill.tableColumns -->
+      <thead id="review-table-head"></thead>
+      <tbody id="review-table-body"></tbody>
+    </table>
+  </div>
+
+  <div class="review-empty" id="review-empty-state" style="display:none;">
+    No swings yet — session ended before any swing was recorded.
+  </div>
+
+  <div class="review-actions">
+    <!-- v0.4.1.8: button rework. Two download paths exposed:
+         1. "Download bundle (videos+JSON)" — ZIP with all videos
+            + session JSON. Primary action for handing off a
+            session for offline analysis.
+         2. "Download JSON" — JSON only, no size limit concern.
+            Useful when MediaRecorder is unsupported, or for
+            quick metric-only inspections, or when sessions
+            exceed the user's transport size limit (e.g. email
+            attachments) and they only need the numbers.
+         CSV download stays for backwards compat / spreadsheet
+         use. -->
+    <button id="review-export-videos-btn" style="display:none;">Download bundle (videos+JSON)</button>
+    <button id="review-export-raw-btn">Download JSON</button>
+    <button id="review-export-btn">Download session CSV</button>
+    <button id="review-discard-btn">Discard and end</button>
+  </div>
+</div>
+```
+
   </div>
 
   <div id="loading">
@@ -1030,50 +1037,53 @@
       <div id="result-shape"></div>            <!-- "Shape: pull" when shape called; else empty -->
     </div>
 
-    <div id="result-actions">
-      <button id="result-close">Next Swing</button>
-      <button id="result-end">End session</button>
+```
+<div id="result-actions">
+  <button id="result-close">Next Swing</button>
+  <button id="result-end">End session</button>
+</div>
+
+<!-- v0.3.3.1: per-swing "Save raw data" link removed. Session-wide
+     JSON dump on the review screen supersedes it. -->
+<div id="result-dev-links">
+  <a id="result-debug-toggle" href="#" role="button">Show debug</a>
+</div>
+
+<!-- v0.3.2: DEBUG (hidden by default). All the v0.3.1-era dev content
+     lives in here. Show debug toggles visibility. Chart is re-drawn
+     every time showResult runs so the content is always current when
+     revealed. -->
+<div id="result-debug" class="hidden">
+  <!-- Keeping the old internal verdict string accessible for debug. -->
+  <div id="result-verdict-debug"></div>
+
+  <div id="warnings"></div>
+
+  <div id="chart-section">
+    <div id="chart-title">Wrist Height Over Time</div>
+    <canvas id="chart-canvas"></canvas>
+    <div id="chart-legend">
+      <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--finish)"></div>Finish</div>
     </div>
+  </div>
 
-    <!-- v0.3.3.1: per-swing "Save raw data" link removed. Session-wide
-         JSON dump on the review screen supersedes it. -->
-    <div id="result-dev-links">
-      <a id="result-debug-toggle" href="#" role="button">Show debug</a>
-    </div>
+  <div id="diagnostics"></div>
 
-    <!-- v0.3.2: DEBUG (hidden by default). All the v0.3.1-era dev content
-         lives in here. Show debug toggles visibility. Chart is re-drawn
-         every time showResult runs so the content is always current when
-         revealed. -->
-    <div id="result-debug" class="hidden">
-      <!-- Keeping the old internal verdict string accessible for debug. -->
-      <div id="result-verdict-debug"></div>
+  <div id="last-heard-row">
+    <span class="lh-label">Last heard:</span>
+    <span class="lh-value" id="last-heard-value">—</span>
+  </div>
 
-      <div id="warnings"></div>
+  <div id="transcript-debug">
+    <div class="td-label">Recent transcripts (debug)</div>
+    <div class="td-list" id="transcript-list"></div>
+  </div>
+</div>
+```
 
-      <div id="chart-section">
-        <div id="chart-title">Wrist Height Over Time</div>
-        <canvas id="chart-canvas"></canvas>
-        <div id="chart-legend">
-          <div class="legend-item"><div class="legend-dot" style="background: var(--address)"></div>Address</div>
-          <div class="legend-item"><div class="legend-dot" style="background: var(--top)"></div>Top</div>
-          <div class="legend-item"><div class="legend-dot" style="background: var(--impact)"></div>Impact</div>
-          <div class="legend-item"><div class="legend-dot" style="background: var(--finish)"></div>Finish</div>
-        </div>
-      </div>
-
-      <div id="diagnostics"></div>
-
-      <div id="last-heard-row">
-        <span class="lh-label">Last heard:</span>
-        <span class="lh-value" id="last-heard-value">—</span>
-      </div>
-
-      <div id="transcript-debug">
-        <div class="td-label">Recent transcripts (debug)</div>
-        <div class="td-list" id="transcript-list"></div>
-      </div>
-    </div>
   </div>
 
   <div id="error-panel">
@@ -1082,11 +1092,13 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+
   <!-- v0.4.1.7: JSZip used to bundle session videos + JSON into a single
        download. Replaces v0.4.1.3's sequential anchor-click downloads,
        which iOS Safari throttles down to 1 file in practice. ~94 KB
        gzipped, loaded once at startup, used only on the review screen
        when the user taps "Download session". -->
+
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin="anonymous"></script>
 
   <script>
@@ -1859,7 +1871,34 @@
     // stays at 4000 — the analysis window inside the 5s recording is still
     // 4s from the detected Address frame, which is more than enough for any
     // real swing. The extra second is just pre-swing margin.
-    const RECORDING_DURATION_MS = 5000;        // auto-stop recording 5s after window opens
+    //
+    // v0.4.1.11: bumped 5000 → 8000 to test whether the per-recording
+    // ~350ms missing-frames hole is one-time-at-recording-start or
+    // periodic. With 8s of post-warmup window, a periodic ~1.15s hole
+    // would recur ~5–6 times; a one-time hole would still be absent
+    // (because the warmup change moved it out of the window). Also
+    // accommodates the stillness/no-swing test the field session
+    // includes. Cost: each swing JSON is ~60% larger and the user
+    // waits up to 3s longer per swing (8s window + 2s warmup vs the
+    // old 5s window with no warmup).
+    const RECORDING_DURATION_MS = 8000;        // auto-stop recording 8s after window opens
+    // v0.4.1.11: MediaRecorder warmup phase. MediaRecorder.start() is
+    // hypothesised to starve MediaPipe of frames for ~350ms while it
+    // spins up its encoder pipeline (GPU/codec init contending with
+    // pose inference for the same camera stream). The fix: start
+    // MediaRecorder MEDIARECORDER_WARMUP_MS before flipping appState
+    // to 'recording'. During the warmup phase the recorder is running
+    // and burning through its startup hole, but we don't collect
+    // pose frames — so the hole lands in throwaway pre-swing footage
+    // instead of the analysis window. After the warmup, frames[] is
+    // initialised, recordingStartTime is set, and pose collection
+    // begins on a recorder that is already past its startup cost.
+    // Side effect: the captured video file now contains ~2s of pre-
+    // swing warmup footage. Eyeball-checks need to add this offset
+    // when locating swing events. If the hypothesis pans out, a
+    // future version can trim the video on stop or live with the
+    // extra footage.
+    const MEDIARECORDER_WARMUP_MS = 2000;
     const POST_READY_DELAY_MS   = 1500;        // v0.3.0: pause between TTS "ready" echo
                                                 //         finishing and recording opening.
     // v0.3.3.3: single beep at end of POST_READY_DELAY_MS, then recording
@@ -2522,6 +2561,13 @@
     // v0.2.1 hands-free loop state
     let shapeEnabled = false;         // controlled by shape-toggle
     let recordingAutoStopTimer = null;
+    // v0.4.1.11: timer for the MediaRecorder warmup phase. Set in
+    // beginRecording() at the moment MediaRecorder.start() fires; clears
+    // itself when the warmup ends and the recording window opens. Held
+    // separate from recordingAutoStopTimer so stopRecording() can cancel
+    // it even if the user taps Stop during the warmup phase (rare, but
+    // possible).
+    let warmupTimer = null;
     let shapeHeardTimer = null;
     let pendingShape = null;          // shape captured for the most recent swing
 
@@ -2591,6 +2637,7 @@
       if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
       if (readyDelayTimer) { clearTimeout(readyDelayTimer); readyDelayTimer = null; }
       if (recordingAutoStopTimer) { clearTimeout(recordingAutoStopTimer); recordingAutoStopTimer = null; }
+      if (warmupTimer) { clearTimeout(warmupTimer); warmupTimer = null; }   // v0.4.1.11
       if (shapeHeardTimer) { clearTimeout(shapeHeardTimer); shapeHeardTimer = null; }
       // Stop speech recognition — start screen doesn't listen.
       stopRecognition();
@@ -2620,6 +2667,7 @@
       if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
       if (readyDelayTimer) { clearTimeout(readyDelayTimer); readyDelayTimer = null; }
       if (recordingAutoStopTimer) { clearTimeout(recordingAutoStopTimer); recordingAutoStopTimer = null; }
+      if (warmupTimer) { clearTimeout(warmupTimer); warmupTimer = null; }   // v0.4.1.11
       appRoot.classList.remove('mode-start', 'mode-session');
       appRoot.classList.add('mode-review');
       renderReview();
@@ -2944,7 +2992,7 @@
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.10',
+        version: '0.4.1.11',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3101,7 +3149,7 @@
     // round-tripping through a download. Mirrors exportSessionRawJSON.
     function buildSessionJsonPayload() {
       return {
-        version: '0.4.1.10',
+        version: '0.4.1.11',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3781,18 +3829,46 @@
       // after TTS finishes) so the golfer internalizes the rhythm in a few
       // swings. If field testing shows this is disorienting, re-introduce
       // a single subtle tone here (single-oscillator per the design caution).
-      frames = [];
-      recordingStartTime = performance.now();
+      //
+      // v0.4.1.11: TWO-PHASE recording start to test the MediaRecorder-startup
+      // hypothesis for the per-recording missing-frames hole.
+      //
+      //   Phase 1 (warmup, MEDIARECORDER_WARMUP_MS):
+      //     - MediaRecorder.start() fires NOW.
+      //     - appState stays 'counting' so onPoseResults does NOT push into
+      //       frames[]. The warmup phase is invisible to the analyzer.
+      //     - The UI shows the same "Recording…" border/status as before so
+      //       the golfer's experience of "ready → window opens" is unchanged
+      //       in feel. (We could distinguish a "warming up" state visually
+      //       but that breaks the established rhythm; the cost of treating
+      //       warmup as recording in the UI is just a slightly later actual
+      //       analysis start, which is what we want anyway.)
+      //
+      //   Phase 2 (recording, RECORDING_DURATION_MS):
+      //     - frames = [] and recordingStartTime = performance.now() set HERE,
+      //       not at MediaRecorder.start(). All JSON timestamps are now
+      //       relative to the post-warmup moment, so a "hole at ~1.15s into
+      //       the recording" in the data still means the same thing it did
+      //       in v0.4.1.10 — except now the MediaRecorder is already 2s
+      //       past its startup cost.
+      //     - appState flips to 'recording' so onPoseResults starts
+      //       collecting.
+      //     - The auto-stop timer is scheduled HERE for RECORDING_DURATION_MS
+      //       (8s in v0.4.1.11), so the recording window length is measured
+      //       from the post-warmup start, not the MediaRecorder start.
+      //
+      // beepTime/pendingShape resets stay in phase 1 (no harm done early).
       beepTime = 0;
       pendingShape = null;
       updateLastHeardDisplay(null); // v0.2.4: reset for the new swing
-      appState = 'recording';
       recordBtn.textContent = 'Stop';
       recordBtn.classList.remove('counting');
       recordBtn.classList.add('recording');
       recordBtn.disabled = false;
       recIndicator.classList.add('active');
       recBorder.classList.add('active');
+      // v0.4.1.11: status mirrors the post-warmup recording window length
+      // (8s in this version). The 2s warmup is hidden from the UI.
       status.textContent = `Recording… (auto-stops in ${(RECORDING_DURATION_MS/1000).toFixed(0)}s)`;
 
       // v0.4.1.3: video capture. Spin up a fresh MediaRecorder for this
@@ -3811,6 +3887,10 @@
       // and write into its own chunks array. showResult just reads the
       // pendingRecording.blob field (or sets a callback if not ready
       // yet).
+      //
+      // v0.4.1.11: this block now runs BEFORE the appState flip, during
+      // the warmup phase. localRecorder.start() is the moment we're
+      // trying to push the startup-hole away from the analysis window.
       currentVideoChunks = [];
       currentRecording = null;  // v0.4.1.7: reset before assignment
       if (mediaRecorderSupported && cameraStream) {
@@ -3874,13 +3954,42 @@
         }
       }
 
-      // v0.2.1: auto-stop the recording. This is what makes the session hands-free.
-      // Tap Stop still works — it fires stopRecording early and clears the timer.
-      if (recordingAutoStopTimer) clearTimeout(recordingAutoStopTimer);
-      recordingAutoStopTimer = setTimeout(() => {
-        recordingAutoStopTimer = null;
-        if (appState === 'recording') stopRecording();
-      }, RECORDING_DURATION_MS);
+      // v0.4.1.11: phase 2 — flip into 'recording' state after the warmup
+      // delay. Until this fires, appState is still 'counting' (from the
+      // startSwing flow that called us), so onPoseResults won't collect
+      // pose results into frames[]. When this fires:
+      //
+      //   - frames[] is initialized fresh (any pose results that may have
+      //     leaked through during warmup despite the appState gate are
+      //     discarded — defence in depth).
+      //   - recordingStartTime is captured. JSON timestamps in this swing
+      //     start from zero at this moment, NOT at MediaRecorder.start().
+      //   - appState flips to 'recording'.
+      //   - The auto-stop timer is scheduled for RECORDING_DURATION_MS
+      //     (8s) from this moment.
+      //
+      // If the user taps Stop or the session is cancelled during the
+      // warmup phase, stopRecording() clears warmupTimer and we never
+      // enter phase 2.
+      if (warmupTimer) clearTimeout(warmupTimer);
+      warmupTimer = setTimeout(() => {
+        warmupTimer = null;
+        // Defensive: if the user / session aborted between phase 1 and
+        // phase 2 somehow, don't promote into recording.
+        if (appState !== 'counting') return;
+
+        frames = [];
+        recordingStartTime = performance.now();
+        appState = 'recording';
+
+        // v0.2.1: auto-stop the recording. This is what makes the session hands-free.
+        // Tap Stop still works — it fires stopRecording early and clears the timer.
+        if (recordingAutoStopTimer) clearTimeout(recordingAutoStopTimer);
+        recordingAutoStopTimer = setTimeout(() => {
+          recordingAutoStopTimer = null;
+          if (appState === 'recording') stopRecording();
+        }, RECORDING_DURATION_MS);
+      }, MEDIARECORDER_WARMUP_MS);
     }
 
     function stopRecording() {
@@ -3888,6 +3997,12 @@
       if (recordingAutoStopTimer) {
         clearTimeout(recordingAutoStopTimer);
         recordingAutoStopTimer = null;
+      }
+      // v0.4.1.11: also clear warmupTimer in case the user/system stopped
+      // recording during the 2s warmup phase. Safe to clear unconditionally.
+      if (warmupTimer) {
+        clearTimeout(warmupTimer);
+        warmupTimer = null;
       }
       appState = 'idle';
       // v0.3.0 patch: button shows "Analyzing" during the brief analyze gap,
@@ -4672,7 +4787,7 @@
       });
 
       lastAnalysis = {
-        version: '0.4.1.10',
+        version: '0.4.1.11',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -4849,6 +4964,16 @@
         resultPanel.classList.remove('visible');
         startSwing();
       } else if (appState === 'recording') {
+        stopRecording();
+      } else if (appState === 'counting' && warmupTimer) {
+        // v0.4.1.11: the user tapped Stop during the MediaRecorder warmup
+        // phase. The button is enabled and labelled "Stop" during warmup
+        // (begin recording sets it), so this is a legitimate interaction.
+        // We just route to stopRecording, which now clears warmupTimer
+        // and tears down MediaRecorder cleanly. Note: appState === 'counting'
+        // alone is NOT a tap target, because the same state is used during
+        // the pre-warmup TTS ready delay where the button is disabled — the
+        // warmupTimer check distinguishes the two.
         stopRecording();
       }
     });
@@ -5038,5 +5163,6 @@
       }
     })();
   </script>
+
 </body>
 </html>
