@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.11</title>
+  <title>Golf Coach — v0.4.1.12</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -1881,7 +1881,15 @@ html, body {
     // includes. Cost: each swing JSON is ~60% larger and the user
     // waits up to 3s longer per swing (8s window + 2s warmup vs the
     // old 5s window with no warmup).
-    const RECORDING_DURATION_MS = 8000;        // auto-stop recording 8s after window opens
+    //
+    // v0.4.1.12: reverted 8000 → 5000. The 8s window did its job — the
+    // first v0.4.1.11 session showed zero gaps anywhere in two 8-second
+    // recordings, confirming the hole was a one-time MediaRecorder
+    // startup cost (now absorbed by the 2s warmup) and NOT a periodic
+    // wall-clock artefact. The 8s window also blew through the 36MB
+    // session-export limit at >2 swings per session, which is the
+    // operational reason to revert. The warmup itself stays.
+    const RECORDING_DURATION_MS = 5000;        // auto-stop recording 5s after window opens
     // v0.4.1.11: MediaRecorder warmup phase. MediaRecorder.start() is
     // hypothesised to starve MediaPipe of frames for ~350ms while it
     // spins up its encoder pipeline (GPU/codec init contending with
@@ -2992,7 +3000,7 @@ html, body {
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.11',
+        version: '0.4.1.12',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3149,7 +3157,7 @@ html, body {
     // round-tripping through a download. Mirrors exportSessionRawJSON.
     function buildSessionJsonPayload() {
       return {
-        version: '0.4.1.11',
+        version: '0.4.1.12',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3381,6 +3389,38 @@ html, body {
       gain.connect(audioCtx.destination);
       osc.start(now);
       osc.stop(now + 0.1);
+    }
+
+    // v0.4.1.12: clearer "GO" cue, fired the moment the recording window
+    // opens (post-warmup). Distinct from playTick() — louder, longer, and
+    // pitched higher with a rising chirp — so the golfer knows the swing
+    // window is live without needing to watch the screen. Single
+    // oscillator with a frequency ramp (NOT two oscillators — see the
+    // v0.3.x note about playShapeChime causing desktop Edge silence
+    // when stacking oscillators).
+    //
+    // Profile: 600Hz → 1000Hz over 180ms, peak gain 0.25 (about 2x
+    // playTick), ~250ms total envelope. Tested mentally: clearly
+    // distinguishable from the soft 440Hz tick the codebase used to
+    // play, and from any incidental UI sound.
+    function playGoTone() {
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      // Rising chirp — start at 600Hz, ramp to 1000Hz over 180ms.
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.linearRampToValueAtTime(1000, now + 0.18);
+      // Envelope: fast attack, hold, gentle release. Total ~250ms.
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.25, now + 0.015);
+      gain.gain.linearRampToValueAtTime(0.25, now + 0.18);
+      gain.gain.linearRampToValueAtTime(0, now + 0.25);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.27);
     }
 
     // v0.4.0: playShapeChime removed (v0.2.3-era shape-recognition chime,
@@ -3801,18 +3841,21 @@ html, body {
       recordBtn.textContent = '…';
       recordBtn.classList.add('counting');
       recordBtn.disabled = true;
-      status.textContent = 'Get into your stance — recording opens on the beep.';
+      status.textContent = 'Get into your stance — swing on the tone.';
 
       speak('ready');                     // TTS echo — golfer hears "ready" back
 
-      // After the TTS echo finishes (POST_READY_DELAY_MS), play one tick
-      // and open the recording window in the same callback. The tick IS
-      // the cue that recording is now live.
+      // v0.4.1.12: silence between TTS "ready" and the GO tone. The 2s
+      // MediaRecorder warmup is invisible to the golfer; the only audio
+      // cue between "ready" and the swing window opening is the GO tone
+      // fired inside beginRecording() when phase 2 begins. Earlier
+      // versions played a soft 440Hz tick here; that tick has been
+      // removed because it fired at warmup-START, not at swing-window-
+      // OPEN, which trained the wrong rhythm.
       if (readyDelayTimer) { clearTimeout(readyDelayTimer); readyDelayTimer = null; }
       readyDelayTimer = setTimeout(() => {
         readyDelayTimer = null;
         if (appState !== 'counting') return;   // user cancelled somehow
-        playTick();
         beginRecording();
       }, POST_READY_DELAY_MS);
     }
@@ -3858,18 +3901,24 @@ html, body {
       //       from the post-warmup start, not the MediaRecorder start.
       //
       // beepTime/pendingShape resets stay in phase 1 (no harm done early).
+      //
+      // v0.4.1.12: UI flips moved out of phase 1, into phase 2. The
+      // v0.4.1.11 comment above is now stale on this point: keeping the
+      // button in 'counting' (amber) during the 2s warmup, then flipping
+      // to 'recording' (red) + GO tone the moment the swing window
+      // actually opens, gives the golfer an unambiguous signal that
+      // "now is the time to swing". The visual+audio cues are also
+      // simultaneous, so a glance OR an ear catches it. Status text in
+      // phase 1 is "Get ready…" (warmup), not "Recording…" — the latter
+      // is now reserved for the live analysis window.
       beepTime = 0;
       pendingShape = null;
       updateLastHeardDisplay(null); // v0.2.4: reset for the new swing
-      recordBtn.textContent = 'Stop';
-      recordBtn.classList.remove('counting');
-      recordBtn.classList.add('recording');
-      recordBtn.disabled = false;
-      recIndicator.classList.add('active');
-      recBorder.classList.add('active');
-      // v0.4.1.11: status mirrors the post-warmup recording window length
-      // (8s in this version). The 2s warmup is hidden from the UI.
-      status.textContent = `Recording… (auto-stops in ${(RECORDING_DURATION_MS/1000).toFixed(0)}s)`;
+
+      // Phase 1 UI: still 'counting' (amber), button shows "…" (carried
+      // over from startSwing), status explains what's happening. The
+      // user is NOT yet supposed to swing.
+      status.textContent = 'Get ready — swing on the tone.';
 
       // v0.4.1.3: video capture. Spin up a fresh MediaRecorder for this
       // swing, capturing chunks into currentVideoChunks. The blob gets
@@ -3981,6 +4030,20 @@ html, body {
         frames = [];
         recordingStartTime = performance.now();
         appState = 'recording';
+
+        // v0.4.1.12: phase 2 UI flip — button goes red, "Stop" label,
+        // REC indicator + border on, status shows the live window
+        // length, and GO tone fires. All four cues land in the same
+        // tick so the golfer gets a simultaneous visual + audio signal
+        // that the swing window is now open.
+        recordBtn.textContent = 'Stop';
+        recordBtn.classList.remove('counting');
+        recordBtn.classList.add('recording');
+        recordBtn.disabled = false;
+        recIndicator.classList.add('active');
+        recBorder.classList.add('active');
+        status.textContent = `Recording… (auto-stops in ${(RECORDING_DURATION_MS/1000).toFixed(0)}s)`;
+        playGoTone();
 
         // v0.2.1: auto-stop the recording. This is what makes the session hands-free.
         // Tap Stop still works — it fires stopRecording early and clears the timer.
@@ -4787,7 +4850,7 @@ html, body {
       });
 
       lastAnalysis = {
-        version: '0.4.1.11',
+        version: '0.4.1.12',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
