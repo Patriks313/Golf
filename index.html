@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Golf Coach — v0.4.1.12</title>
+  <title>Golf Coach — v0.4.1.13</title>
   <style>
     :root {
       --bg: #0f1712;
@@ -1103,6 +1103,76 @@ html, body {
 
   <script>
     // ============================================================
+    // Golf Coach v0.4.1.13 — HORIZONTAL-AXIS GATES FOR P1 AND P7
+    //
+    // Structural fix to swing segmentation. The brief v4.5 hypothesis:
+    // P1 (address) and P7 (impact) are both predominantly horizontal
+    // motion events. They were being detected on the vertical axis
+    // (wristY), which is why both failed in characteristic ways:
+    //   - P1 fired late: wrists move horizontally first in the takeaway,
+    //     so a vertical detector waits until they ALSO start rising.
+    //   - P7 (the v0.4.1.10 addressMatch detector) over-corrected on
+    //     outdoor data — body landmarks alone don't pin down impact
+    //     tightly enough when the swing isn't a controlled shadow swing.
+    //
+    // P4 (top of backswing) and P10 (finish) are genuine vertical
+    // extremes — wrists are at their highest. Those are unchanged.
+    //
+    // Changes:
+    //
+    //   + P1 detection switched from |Δ wristY| to |Δ wristX|. Same
+    //     5-frame motion-confirmation structure, same 0.005-units-per-
+    //     frame threshold, same iteration pattern. The address frame is
+    //     now "the last frame before sustained horizontal wrist motion."
+    //     Direction-agnostic via abs() — works for right-handed or
+    //     left-handed swings.
+    //
+    //   + P7 detection: PRIMARY is now wristX returning through its
+    //     P1 value. We compute wristX_at_P1, then in [P4..P10] find the
+    //     first frame where wristX crosses back through that value
+    //     (matched on the same direction-side as the P1 reference, with
+    //     a small tolerance to avoid noise-jitter triggering early). If
+    //     no clean crossing exists in the window, we fall back to the
+    //     legacy median of (wristY argmax, elbowY argmax, shoulderRot
+    //     argmax). addressMatch is also retained as a backup-of-
+    //     backups and as a diagnostic.
+    //
+    //   + P4 and P10 detection unchanged — same wristY peak-finder,
+    //     same merge logic. They are vertical-extreme events and the
+    //     wristY signal is the right one for them.
+    //
+    // Why structural-not-data-validated yet: brief v4.5 commits to the
+    // axis-consistency framing ahead of direct ground-truth validation
+    // of wristX-return-through-P1-x. The May 6 outdoor session showed
+    // legacy median lands within ±1 frame of true impact on 3 swings
+    // — that's the backup signal, validated. The primary detector
+    // (wristX-return) needs validation against extracted frames on
+    // (a) the May 1 12-swing outdoor dataset, (b) indoor shadow-swing
+    // data, (c) re-running the May 6 outdoor session itself, before
+    // we can promote v0.4.1.13 from "shipped" to "validated."
+    //
+    // Diagnostics retained on every swing record:
+    //   - p7Candidates.wristXReturn   (the new primary)
+    //   - p7Candidates.addressMatch   (v0.4.1.9/10 detector, demoted)
+    //   - p7Candidates.wristY         (legacy median input)
+    //   - p7Candidates.elbowY         (legacy median input)
+    //   - p7Candidates.shoulderRot    (legacy median input)
+    //   - p7Candidates.legacyMedian   (median of the three legacy)
+    //   - p7Candidates.usedDetector   ('wristXReturn' or 'legacyMedian')
+    //   - p7Candidates.spread         (max - min across all candidates)
+    //   - p7Candidates.lowConfidence  (boolean, > 8 frames spread)
+    //
+    // What does NOT change:
+    //   - Capture pipeline, MediaRecorder warmup (v0.4.1.11), TTS,
+    //     drill API, JSON export schema (additive only — new
+    //     wristXReturn field), CSV columns.
+    //   - The smoothed wristY trace persisted in JSON is unchanged
+    //     so post-hoc tools that index it still work. We additionally
+    //     persist a smoothed wristX trace for the same reason.
+    //   - Tempo and head-stability drills consume the same four
+    //     phase indices as before.
+    //
+    // ============================================================
     // Golf Coach v0.4.1.8 — REVIEW-SCREEN BUTTON CLEANUP
     //
     // UX patch on top of v0.4.1.7. Field testing of v0.4.1.7
@@ -2043,12 +2113,15 @@ html, body {
           ['Wrist rise', (smoothed[addressIdx] - smoothed[topIdx]).toFixed(3)]
         ];
 
-        // v0.4.1.9: surface all four P7 candidates in diag. addressMatch
-        // is the primary (drives impactIdx); the three legacy signals are
-        // diagnostics. spread compares all four.
+        // v0.4.1.13: surface the wristXReturn primary, legacy median
+        // backup, and usedDetector flag. addressMatch + the three legacy
+        // signals stay as diagnostic candidates.
         if (p7Candidates) {
           diag.push(
-            ['P7 addressMatch (primary)', `frame ${p7Candidates.addressMatch}`],
+            ['P7 detector used', p7Candidates.usedDetector || '—'],
+            ['P7 wristX-return (primary)', p7Candidates.wristXReturn >= 0 ? `frame ${p7Candidates.wristXReturn}` : 'no crossing'],
+            ['P7 legacy median (backup)', `frame ${p7Candidates.legacyMedian}`],
+            ['P7 addressMatch (diag)', `frame ${p7Candidates.addressMatch}`],
             ['P7 wrist-Y candidate (diag)', `frame ${p7Candidates.wristY}`],
             ['P7 elbow-Y candidate (diag)', `frame ${p7Candidates.elbowY}`],
             ['P7 shoulder-rot candidate (diag)', `frame ${p7Candidates.shoulderRot}`],
@@ -2375,12 +2448,14 @@ html, body {
           ['Impact worse axis', `${impactWorseAxis.toFixed(2)} in (off threshold ${IMPACT_OFF_INCHES})`]
         ];
 
-        // v0.4.1.9: surface all four P7 candidates in diag. Same rationale
-        // as the tempo drill. Particularly important for head stability
-        // since the impact gate depends on P7 being right.
+        // v0.4.1.13: surface wristXReturn primary, legacy median backup,
+        // and usedDetector. Same rationale as the tempo drill.
         if (p7Candidates) {
           diag.push(
-            ['P7 addressMatch (primary)', `frame ${p7Candidates.addressMatch}`],
+            ['P7 detector used', p7Candidates.usedDetector || '—'],
+            ['P7 wristX-return (primary)', p7Candidates.wristXReturn >= 0 ? `frame ${p7Candidates.wristXReturn}` : 'no crossing'],
+            ['P7 legacy median (backup)', `frame ${p7Candidates.legacyMedian}`],
+            ['P7 addressMatch (diag)', `frame ${p7Candidates.addressMatch}`],
             ['P7 wrist-Y candidate (diag)', `frame ${p7Candidates.wristY}`],
             ['P7 elbow-Y candidate (diag)', `frame ${p7Candidates.elbowY}`],
             ['P7 shoulder-rot candidate (diag)', `frame ${p7Candidates.shoulderRot}`],
@@ -3000,7 +3075,7 @@ html, body {
     function exportSessionRawJSON() {
       if (sessionSwings.length === 0) return;
       const payload = {
-        version: '0.4.1.12',
+        version: '0.4.1.13',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -3157,7 +3232,7 @@ html, body {
     // round-tripping through a download. Mirrors exportSessionRawJSON.
     function buildSessionJsonPayload() {
       return {
-        version: '0.4.1.12',
+        version: '0.4.1.13',
         sessionStartedAt: sessionConfig && sessionConfig.startedAt
           ? new Date(sessionConfig.startedAt).toISOString()
           : null,
@@ -4246,12 +4321,55 @@ html, body {
 
       const smoothed = smooth(rawY, 5);
 
+      // v0.4.1.13: build a smoothed wristX trace alongside the wristY trace.
+      // Same low-confidence fallback chain (left, right, lower-confidence
+      // fallback). wristX drives P1 detection (motion-onset on the
+      // horizontal axis) and is the primary signal for P7 (return-through-
+      // P1-x). The trace is also persisted in JSON so post-hoc tools can
+      // inspect the horizontal motion the same way they inspect wristY.
+      const rawX = frames.map(f => {
+        const lw = f.landmarks[LM.LEFT_WRIST];
+        const rw = f.landmarks[LM.RIGHT_WRIST];
+        const lOk = lw.v >= HIGH_CONF;
+        const rOk = rw.v >= HIGH_CONF;
+        if (lOk && rOk) return (lw.x + rw.x) / 2;
+        if (lOk) return lw.x;
+        if (rOk) return rw.x;
+        if (lw.v >= LOW_CONF && lw.v >= rw.v) return lw.x;
+        if (rw.v >= LOW_CONF && rw.v > lw.v) return rw.x;
+        return null;
+      });
+      let lastX = null;
+      for (let i = 0; i < rawX.length; i++) {
+        if (rawX[i] == null) rawX[i] = lastX;
+        else lastX = rawX[i];
+      }
+      const firstXVal = rawX.find(x => x != null);
+      for (let i = 0; i < rawX.length; i++) {
+        if (rawX[i] == null) rawX[i] = firstXVal != null ? firstXVal : 0.5;
+      }
+      const smoothedX = smooth(rawX, 5);
+
+      // v0.4.1.13: P1 is now horizontal motion-onset, not vertical.
+      // Wrists move SIDEWAYS first in the takeaway — they swing back from
+      // the ball before the wrists start hinging upward. A vertical-only
+      // detector waits for the rise, which is structurally late.
+      //
+      // Algorithm: same shape as the v0.4.1.12 vertical detector — walk
+      // forward, ask "in the next 5 frames, did the wrist move horizontally
+      // by more than 0.005 units per frame on average?" If yes, that's the
+      // motion onset; the previous frame is the address. Direction-agnostic
+      // via abs() — works for right-handed (wrist moves to the player's
+      // right) or left-handed (wrist moves to the player's left) swings.
+      //
+      // Threshold structure preserved (5 confirming frames, 0.005 units per
+      // frame); only the axis changed.
       const MOTION_CONFIRM = 5;
       const MIN_MOTION_PER_FRAME = 0.005;
       let addressIdx = 0;
-      for (let i = 0; i < smoothed.length - MOTION_CONFIRM; i++) {
-        const futureDrop = smoothed[i] - smoothed[i + MOTION_CONFIRM];
-        if (futureDrop < MIN_MOTION_PER_FRAME * MOTION_CONFIRM) {
+      for (let i = 0; i < smoothedX.length - MOTION_CONFIRM; i++) {
+        const futureDriftX = Math.abs(smoothedX[i + MOTION_CONFIRM] - smoothedX[i]);
+        if (futureDriftX < MIN_MOTION_PER_FRAME * MOTION_CONFIRM) {
           addressIdx = i;
         } else {
           break;
@@ -4517,45 +4635,123 @@ html, body {
 
       // ----- end v0.4.1.9 addressMatch ------------------------------------
 
-      // 4) v0.4.1.9: addressMatch is the primary P7. The three legacy
-      //    signals are kept as diagnostics — their argmax-of-smoothed
-      //    construction means they peak in early follow-through, not at
-      //    impact. We retain them to flag any future swing where
-      //    addressMatch disagrees materially with the (biased) consensus
-      //    of the legacy signals — that's a useful "look at this swing"
-      //    indicator even if the legacy signals shouldn't drive the
-      //    verdict. v0.4.1.6 used median-of-three as impactIdx; that line
-      //    is removed.
-      const impactIdx = addressMatchCandidate;
+      // ----- v0.4.1.13: wristX-return-through-P1-x as primary P7 ----------
+      // The structural argument from brief v4.5: P7 (impact) is a
+      // horizontal-motion event. The hands cross BACK through the address
+      // x-position on their way through the ball. Detecting that crossing
+      // directly should beat any "find the extreme of some signal" approach
+      // because the signal we're looking at is exactly the one that
+      // *defines* impact geometrically.
+      //
+      // Algorithm:
+      //   1. Take wristX_at_P1 (the smoothed wristX value at addressIdx).
+      //   2. Note which side of P1-x the wrists are on at P4 (top of
+      //      backswing). They're on one side because the backswing has
+      //      moved them away from the ball.
+      //   3. Walk forward from P4+1 to P10-1 and find the first frame where
+      //      smoothed wristX crosses back through wristX_at_P1.
+      //
+      // The "crossing" check uses sign-change-of-difference relative to the
+      // P4 reference side, with a tiny tolerance band so MediaPipe jitter
+      // doesn't trigger a false crossing near the address line.
+      //
+      // If no crossing is found in the window (e.g. the wrists never make
+      // it back to the address line — unusual but possible on a very
+      // shallow swing), we fall back to the legacy median of the three
+      // pre-v0.4.1.9 detectors. That fallback was validated on the May 6
+      // outdoor session (3 swings, ±1 frame of true impact).
+      //
+      // addressMatch is retained as a third-tier diagnostic and as a
+      // visible candidate on the swing record — useful for post-hoc
+      // analysis, not for verdict gating.
 
-      // Diagnostic: how far apart are the four candidates? Useful for
-      // post-hoc analysis, not for verdict gating. The "spread" is the
-      // distance between the chosen P7 (addressMatch) and the furthest
-      // legacy candidate. If the legacy signals all agree with each other
-      // but disagree with addressMatch, that's a flag worth investigating.
+      // Reference: smoothed wristX at the address frame.
+      const wristXAtP1 = smoothedX[addressIdx];
+
+      // Which side of P1-x are the hands on at the top of backswing?
+      // sign = +1 if wrists at P4 are at higher x than at P1, -1 if lower,
+      // 0 if (improbably) identical. Used to define what "crossing back
+      // through" means for this swing's geometry/handedness/camera-side.
+      const topSideDelta = smoothedX[topIdx] - wristXAtP1;
+      const topSide = topSideDelta > 0 ? 1 : (topSideDelta < 0 ? -1 : 0);
+
+      // Tolerance band: 0.005 normalized units. Same scale as the P1
+      // motion-onset threshold. Keeps tiny jitter near the address line
+      // from triggering a premature "crossing."
+      const CROSS_TOLERANCE = 0.005;
+
+      // Find first frame in (topIdx, finishIdx) where smoothedX crosses
+      // back through wristXAtP1. "Crossing back" means: at frame i-1 the
+      // wrist was still on the topSide of P1-x by more than the tolerance,
+      // and at frame i it has crossed to the other side (or landed inside
+      // the tolerance band on its way through).
+      let wristXReturnCandidate = -1;
+      if (topSide !== 0) {
+        for (let i = topIdx + 1; i < finishIdx; i++) {
+          const prev = smoothedX[i - 1] - wristXAtP1;
+          const cur = smoothedX[i] - wristXAtP1;
+          // Was on the topSide last frame, has now crossed (sign flipped
+          // OR landed inside tolerance band moving toward the other side).
+          const wasOnTopSide = (topSide > 0 ? prev > CROSS_TOLERANCE : prev < -CROSS_TOLERANCE);
+          const nowCrossed = (topSide > 0 ? cur <= CROSS_TOLERANCE : cur >= -CROSS_TOLERANCE);
+          if (wasOnTopSide && nowCrossed) {
+            wristXReturnCandidate = i;
+            break;
+          }
+        }
+      }
+
+      // Legacy median fallback. Three pre-v0.4.1.9 detectors voting.
+      // Median is robust to a single outlier (e.g. one signal pulled by
+      // a wrist label-swap will be the min or the max, not the middle).
+      const legacyTriad = [wristYCandidate, elbowYCandidate, shoulderRotCandidate]
+        .slice().sort((a, b) => a - b);
+      const legacyMedianCandidate = legacyTriad[1];
+
+      // Pick the primary detector. wristXReturn if we found a clean
+      // crossing; legacy median if not.
+      let impactIdx;
+      let usedDetector;
+      if (wristXReturnCandidate >= 0) {
+        impactIdx = wristXReturnCandidate;
+        usedDetector = 'wristXReturn';
+      } else {
+        impactIdx = legacyMedianCandidate;
+        usedDetector = 'legacyMedian';
+        warnings.push(
+          'Impact detected via legacy median fallback — wrist did not ' +
+          'cross back through address x-line in the swing window.'
+        );
+      }
+      // ----- end v0.4.1.13 wristX-return P7 -------------------------------
+
+      // Diagnostic: how far apart are all the candidates? Useful for
+      // post-hoc analysis, not for verdict gating. Spread is the distance
+      // between the smallest and largest candidate frame across the
+      // primary, the legacy median, and the addressMatch detector.
       const allCandidates = [
+        impactIdx,
+        wristXReturnCandidate >= 0 ? wristXReturnCandidate : legacyMedianCandidate,
+        legacyMedianCandidate,
         addressMatchCandidate,
         wristYCandidate,
         elbowYCandidate,
         shoulderRotCandidate
-      ];
+      ].filter(c => c >= 0);
       const minC = Math.min(...allCandidates);
       const maxC = Math.max(...allCandidates);
       const candidateSpread = maxC - minC;
 
-      // 5) Soft confidence flag. Larger threshold than v0.4.1.6 (was 5)
-      //    because the legacy signals are now expected to be late by
-      //    ~3 frames, so a baseline 3-frame spread between addressMatch
-      //    and the legacy signals is normal. Above 8 frames suggests
-      //    addressMatch may have latched onto a bad minimum (e.g. the
-      //    o22-11 sw2 case from May 1 outdoor data).
+      // Soft confidence flag. >8 frames spread (~265ms at 30fps) suggests
+      // the detectors disagree enough that P7 may be unreliable on this
+      // swing. We still ship the verdict; the flag goes onto the swing
+      // record so the reviewer / future analysis can surface it.
       const P7_SPREAD_WARN = 8;
       const p7LowConfidence = candidateSpread > P7_SPREAD_WARN;
       if (p7LowConfidence) {
         warnings.push(
-          `Impact detection low confidence — addressMatch and legacy ` +
-          `signals (wrist/elbow/shoulder) spread across ${candidateSpread} ` +
-          `frames. P7 may be off.`
+          `Impact detection low confidence — P7 candidates spread across ` +
+          `${candidateSpread} frames. P7 may be off.`
         );
       }
       // ----- end v0.4.1.6 multi-signal P7 consensus -----------------------
@@ -4595,14 +4791,19 @@ html, body {
         cAddress, cTop, cImpact, cFinish,
         tAddress, beepTime, fps, totalMs, clippedDurationMs,
         rawPeaks, mergedPeaks, warnings,
-        // v0.4.1.9: addressMatch is now the primary P7 (drives impactIdx).
-        // The three legacy signals (wristY/elbowY/shoulderRot argmax) are
-        // retained as diagnostic candidates for post-hoc comparison.
+        // v0.4.1.13: wristXReturn is the primary P7 detector (drives
+        // impactIdx). When wristXReturn doesn't find a clean crossing,
+        // legacyMedian (median of wristY/elbowY/shoulderRot argmax) is
+        // the backup. addressMatch is retained as a tertiary diagnostic.
+        // usedDetector indicates which signal actually drove this swing.
         p7Candidates: {
+          wristXReturn: wristXReturnCandidate,
+          legacyMedian: legacyMedianCandidate,
           addressMatch: addressMatchCandidate,
           wristY: wristYCandidate,
           elbowY: elbowYCandidate,
           shoulderRot: shoulderRotCandidate,
+          usedDetector: usedDetector,
           spread: candidateSpread,
           lowConfidence: p7LowConfidence
         },
@@ -4634,6 +4835,10 @@ html, body {
         absImpactIdx: impactIdx,
         absFinishIdx: finishIdx,
         fullWristY: smoothed,
+        // v0.4.1.13: persist the smoothed wristX trace too. Same
+        // rationale as fullWristY — post-hoc tools can now plot the
+        // horizontal motion that drives the new P1 / P7 detectors.
+        fullWristX: smoothedX,
         diag: result.diag,
         warnings: result.warnings || warnings,
         // v0.4.0: extra fields are drill-specific (e.g. tempo provides
@@ -4646,15 +4851,19 @@ html, body {
         // stability uses this for "vertical down 2, horizontal forward 4".
         // showResult prefers this over spokenForClass[verdictClass].
         spokenPhraseOverride: result.spokenPhraseOverride,
-        // v0.4.1.9: persist all four P7 candidates (addressMatch primary,
-        // legacy three as diagnostics) and the spread on the swing record
-        // so post-hoc analysis can validate the change. Indices are
-        // absolute (matching the full frames array).
+        // v0.4.1.13: persist all P7 candidates so post-hoc analysis can
+        // validate the wristXReturn primary against extracted frames and
+        // compare against legacy median + addressMatch. usedDetector
+        // tells you which signal actually drove this swing's impactIdx.
+        // Indices are absolute (matching the full frames array).
         p7Candidates: {
+          wristXReturn: wristXReturnCandidate,
+          legacyMedian: legacyMedianCandidate,
           addressMatch: addressMatchCandidate,
           wristY: wristYCandidate,
           elbowY: elbowYCandidate,
           shoulderRot: shoulderRotCandidate,
+          usedDetector: usedDetector,
           spread: candidateSpread,
           lowConfidence: p7LowConfidence
         }
@@ -4757,6 +4966,9 @@ html, body {
       // the early-exit error paths in analyze() — those still pass the
       // (possibly null) clip-relative indices via the older parameters.
       absAddressIdx, absTopIdx, absImpactIdx, absFinishIdx, fullWristY,
+      // v0.4.1.13: smoothed wristX trace, full-frames-aligned. Persisted
+      // into the swing record alongside fullWristY for post-hoc analysis.
+      fullWristX,
       diag, warnings,
       // v0.4.0: drill-specific extras (e.g. tempo provides
       // {ratio, backswingMs, downswingMs}). Stored verbatim into the
@@ -4850,7 +5062,7 @@ html, body {
       });
 
       lastAnalysis = {
-        version: '0.4.1.12',
+        version: '0.4.1.13',
         // v0.3.0 patch: userId placeholder. Always "local" in v0.x — the app
         // has no notion of identity and works entirely per-device. Kept in
         // the schema so that IF accounts are ever added later, existing
@@ -4878,6 +5090,10 @@ html, body {
         // where p7Candidates was never computed.
         p7Candidates: p7Candidates || null,
         wristY: (fullWristY && fullWristY.length) ? fullWristY : wristY,
+        // v0.4.1.13: persist the smoothed wristX trace alongside wristY so
+        // post-hoc tools can plot horizontal motion (drives P1 / P7).
+        // Falls back to null on error paths where the trace doesn't exist.
+        wristX: (fullWristX && fullWristX.length) ? fullWristX : null,
         // v0.4.1.4: keep the clipped pair around for the debug-toggle
         // chart redraw at line ~4087. The initial chart render at the
         // bottom of showResult() also uses these. Pre-existing clipped
@@ -4930,6 +5146,10 @@ html, body {
       const persistImpactIdx  = (absImpactIdx  != null) ? absImpactIdx  : impactIdx;
       const persistFinishIdx  = (absFinishIdx  != null) ? absFinishIdx  : finishIdx;
       const persistWristY     = (fullWristY && fullWristY.length) ? fullWristY : wristY;
+      // v0.4.1.13: smoothed wristX trace, persisted on the swing record
+      // alongside wristY. Used by post-hoc tools to validate the new P1 /
+      // P7 detectors that operate on horizontal motion.
+      const persistWristX     = (fullWristX && fullWristX.length) ? fullWristX : null;
 
       const isComplete =
         typeof persistAddressIdx === 'number' &&
@@ -4954,6 +5174,9 @@ html, body {
         // with video ground truth.
         p7Candidates: p7Candidates || null,
         wristY: isComplete ? persistWristY.slice() : null,
+        // v0.4.1.13: wristX persisted alongside wristY for post-hoc tools.
+        // Null on incomplete swings or error paths.
+        wristX: (isComplete && persistWristX) ? persistWristX.slice() : null,
         frames: lastAnalysis.frames,
         // v0.4.1.3: video blob for ground-truth debugging. Populated by the
         // MediaRecorder onstop handler below — may be null if recording
